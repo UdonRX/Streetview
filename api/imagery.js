@@ -1,8 +1,9 @@
-/* Streetview Journey v0.1.0 - single Vercel Hobby Function */
+/* Streetview Journey v0.1.3 - single Vercel Hobby Function */
 const KARTA_API = 'https://api.openstreetcam.org/2.0';
 const MAX_FRAMES = 72;
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -31,26 +32,37 @@ function normalizePhoto(photo) {
     sequenceIndex: numberOrNull(photo.sequenceIndex),
     lat: numberOrNull(photo.lat ?? photo.matchLat),
     lng: numberOrNull(photo.lng ?? photo.matchLng),
-    heading: numberOrNull(photo.heading ?? photo.projectionYaw),
+    heading: numberOrNull(photo.heading),
+    projectionYaw: numberOrNull(photo.projectionYaw),
+    projection: photo.projection || null,
+    fieldOfView: numberOrNull(photo.fieldOfView),
     url
   };
 }
 
 function pickWindow(photos, anchorIndex) {
-  const normalized = photos.map(normalizePhoto).filter(Boolean);
+  const seen = new Set();
+  const normalized = photos
+    .map(normalizePhoto)
+    .filter(Boolean)
+    .filter((photo) => {
+      const key = photo.id || photo.url || `${photo.sequenceId}:${photo.sequenceIndex}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
   normalized.sort((a, b) => (a.sequenceIndex ?? 0) - (b.sequenceIndex ?? 0));
   if (normalized.length <= MAX_FRAMES) return normalized;
 
-  let anchor = 0;
+  let start = 0;
   if (Number.isFinite(anchorIndex)) {
-    const found = normalized.findIndex((p) => p.sequenceIndex >= anchorIndex);
-    if (found >= 0) anchor = found;
+    const found = normalized.findIndex((p) => Number.isFinite(p.sequenceIndex) && p.sequenceIndex >= anchorIndex);
+    if (found >= 0) start = found;
   }
 
-  let selected = normalized.slice(anchor, anchor + MAX_FRAMES * 2);
-  if (selected.length < MAX_FRAMES) selected = normalized.slice(Math.max(0, normalized.length - MAX_FRAMES * 2));
-  const stride = Math.max(1, Math.ceil(selected.length / MAX_FRAMES));
-  return selected.filter((_, i) => i % stride === 0).slice(0, MAX_FRAMES);
+  if (start + MAX_FRAMES > normalized.length) start = Math.max(0, normalized.length - MAX_FRAMES);
+  return normalized.slice(start, start + MAX_FRAMES);
 }
 
 async function fetchJson(url) {
@@ -75,7 +87,7 @@ async function findNearby(lat, lng, radius) {
 }
 
 async function sequencePage(sequenceId, sequenceIndex) {
-  const page = Number.isFinite(sequenceIndex) ? Math.floor(Math.max(0, sequenceIndex) / 150) + 1 : 1;
+  const page = Number.isFinite(sequenceIndex) ? Math.floor(Math.max(0, sequenceIndex - 1) / 150) + 1 : 1;
   const params = new URLSearchParams({ sequenceId, page: String(page), itemsPerPage: '150' });
   const json = await fetchJson(`${KARTA_API}/photo/?${params}`);
   return extractData(json);
@@ -91,7 +103,7 @@ module.exports = async function handler(req, res) {
     }
 
     let sequenceId = String(req.query.sequence || '').trim();
-    let anchorIndex = null;
+    let anchorIndex = numberOrNull(req.query.index);
 
     if (!sequenceId) {
       const lat = Number(req.query.lat);
@@ -107,14 +119,10 @@ module.exports = async function handler(req, res) {
     }
 
     const photos = await sequencePage(sequenceId, anchorIndex);
-    let frames = pickWindow(photos, anchorIndex);
-
-    if (frames.length < 12 && photos.length >= 12) {
-      frames = pickWindow([...photos].reverse(), anchorIndex).reverse();
-    }
+    const frames = pickWindow(photos, anchorIndex);
 
     if (frames.length < 2) return res.status(404).json({ error: '再生可能な画像が不足しています' });
-    return res.status(200).json({ version: '0.1.0', source: 'KartaView', sequenceId, frames });
+    return res.status(200).json({ version: '0.1.3', source: 'KartaView', sequenceId, anchorIndex, frames });
   } catch (error) {
     console.error('imagery route error', error);
     return res.status(502).json({ error: 'KartaViewからルートを取得できませんでした' });

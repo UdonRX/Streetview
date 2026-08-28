@@ -1,11 +1,11 @@
-/* Streetview Journey v0.1.2
- * iPhone Safari/PWA prototype: 0.5 second visual frame cadence after playback starts.
+/* Streetview Journey v0.1.3
+ * 0.5s pseudo-video playback with route-direction view locking for 360 imagery.
  */
 (() => {
-  const VERSION = '0.1.2';
+  const VERSION = '0.1.3';
   const FRAME_INTERVAL_MS = 500;
-  const TRANSITION_MS = 340;
-  const PRELOAD_AHEAD = 3;
+  const TRANSITION_MS = 160;
+  const PRELOAD_AHEAD = 4;
 
   const $ = (id) => document.getElementById(id);
   const ui = {
@@ -24,14 +24,78 @@
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const toRad = (deg) => deg * Math.PI / 180;
+  const toDeg = (rad) => rad * 180 / Math.PI;
 
-  function shortestAngleDelta(from = 0, to = 0) {
+  function shortestAngleDelta(from, to) {
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
     return ((to - from + 540) % 360) - 180;
   }
 
-  function motionX(fromHeading, toHeading) {
-    const delta = shortestAngleDelta(fromHeading, toHeading);
-    return clamp(delta * 0.55, -34, 34);
+  function hasCoords(frame) {
+    return Number.isFinite(frame?.lat) && Number.isFinite(frame?.lng);
+  }
+
+  function distanceMeters(a, b) {
+    if (!hasCoords(a) || !hasCoords(b)) return Infinity;
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+    const dLat = lat2 - lat1;
+    const dLng = toRad(b.lng - a.lng);
+    const s = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(Math.max(0, 1 - s)));
+  }
+
+  function bearingBetween(a, b) {
+    if (!hasCoords(a) || !hasCoords(b)) return null;
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+    const bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
+    return Number.isFinite(bearing) ? bearing : null;
+  }
+
+  function routeBearingAt(index) {
+    const current = route[index];
+    if (!current) return null;
+
+    for (let step = 1; step <= 8 && index + step < route.length; step += 1) {
+      const next = route[index + step];
+      if (distanceMeters(current, next) >= 1.2) return bearingBetween(current, next);
+    }
+
+    for (let step = 1; step <= 8 && index - step >= 0; step += 1) {
+      const prev = route[index - step];
+      if (distanceMeters(prev, current) >= 1.2) return bearingBetween(prev, current);
+    }
+
+    return Number.isFinite(current.heading) ? current.heading : null;
+  }
+
+  function viewAnchorX(index) {
+    const frame = route[index];
+    if (!frame) return 50;
+    const travelBearing = routeBearingAt(index);
+    const imageHeading = Number.isFinite(frame.heading)
+      ? frame.heading
+      : (Number.isFinite(frame.projectionYaw) ? frame.projectionYaw : null);
+    if (!Number.isFinite(travelBearing) || !Number.isFinite(imageHeading)) return 50;
+
+    const delta = shortestAngleDelta(imageHeading, travelBearing);
+    const fov = Number.isFinite(frame.fieldOfView) ? frame.fieldOfView : null;
+    const isSphere = String(frame.projection || '').toUpperCase() === 'SPHERE' || (fov && fov >= 180);
+
+    if (isSphere) return clamp(50 + (delta / 360) * 100, 0, 100);
+
+    const horizontalFov = clamp(fov || 100, 45, 170);
+    return clamp(50 + (delta / horizontalFov) * 100, 5, 95);
+  }
+
+  function setFrameView(layer, index, scale = 1.006) {
+    layer.style.objectPosition = `${viewAnchorX(index).toFixed(2)}% 50%`;
+    layer.style.transform = `scale(${scale}) translate3d(0,0,0)`;
   }
 
   async function requestWakeLock() {
@@ -67,41 +131,40 @@
     const total = route.length;
     ui.frameLabel.textContent = `${index + 1} / ${total}`;
     ui.progressBar.style.width = `${((index + 1) / total) * 100}%`;
-    ui.headingLabel.textContent = Number.isFinite(frame.heading) ? `${Math.round(frame.heading)}°` : '—°';
-    ui.coordLabel.textContent = Number.isFinite(frame.lat) && Number.isFinite(frame.lng)
-      ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
+    const travelBearing = routeBearingAt(index);
+    ui.headingLabel.textContent = Number.isFinite(travelBearing) ? `${Math.round(travelBearing)}°` : '—°';
+    ui.coordLabel.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
   }
 
   async function showFirstFrame(frame) {
     activeLayer.style.transition = 'none';
     activeLayer.style.opacity = '0';
     await waitForImage(activeLayer, frame.url);
-    activeLayer.style.transform = 'scale(1.01) translate3d(0,0,0)';
-    requestAnimationFrame(() => {
-      activeLayer.style.transition = 'opacity 260ms ease';
-      activeLayer.style.opacity = '1';
-    });
-    await sleep(280);
+    setFrameView(activeLayer, 0, 1.006);
+    void activeLayer.offsetWidth;
+    activeLayer.style.transition = 'opacity 180ms linear, transform 500ms linear';
+    activeLayer.style.opacity = '1';
+    activeLayer.style.transform = 'scale(1.025) translate3d(0,0,0)';
+    await sleep(190);
   }
 
-  async function morphTo(nextFrame, currentFrame, nextIndex) {
-    const pan = motionX(currentFrame?.heading, nextFrame.heading);
+  async function morphTo(nextFrame, nextIndex) {
     standbyLayer.style.transition = 'none';
     standbyLayer.style.opacity = '0';
-    standbyLayer.style.transform = `scale(.93) translate3d(${pan * -0.45}px,0,0)`;
     await waitForImage(standbyLayer, nextFrame.url);
+    setFrameView(standbyLayer, nextIndex, 1.006);
 
     void standbyLayer.offsetWidth;
-    activeLayer.style.transition = `opacity ${TRANSITION_MS}ms linear, transform ${TRANSITION_MS}ms cubic-bezier(.2,.72,.25,1)`;
-    standbyLayer.style.transition = `opacity ${TRANSITION_MS}ms linear, transform ${TRANSITION_MS}ms cubic-bezier(.2,.72,.25,1)`;
+    activeLayer.style.transition = `opacity ${TRANSITION_MS}ms linear, transform ${FRAME_INTERVAL_MS}ms linear`;
+    standbyLayer.style.transition = `opacity ${TRANSITION_MS}ms linear, transform ${FRAME_INTERVAL_MS}ms linear`;
 
     updateHud(nextIndex, nextFrame);
     activeLayer.style.opacity = '0';
-    activeLayer.style.transform = `scale(1.13) translate3d(${pan}px,0,0)`;
+    activeLayer.style.transform = 'scale(1.035) translate3d(0,0,0)';
     standbyLayer.style.opacity = '1';
-    standbyLayer.style.transform = 'scale(1.015) translate3d(0,0,0)';
+    standbyLayer.style.transform = 'scale(1.025) translate3d(0,0,0)';
 
-    await sleep(TRANSITION_MS + 12);
+    await sleep(TRANSITION_MS + 8);
     const old = activeLayer;
     activeLayer = standbyLayer;
     standbyLayer = old;
@@ -121,7 +184,6 @@
 
     for (let i = 1; i < route.length && token === playbackToken; i += 1) {
       const nextFrame = route[i];
-      standbyLayer.style.opacity = '0';
       await waitForImage(standbyLayer, nextFrame.url);
       if (token !== playbackToken) return;
 
@@ -129,17 +191,17 @@
       if (remaining > 0) await sleep(remaining);
       if (token !== playbackToken) return;
 
-      await morphTo(nextFrame, route[i - 1], i);
+      await morphTo(nextFrame, i);
       preloadAhead(i);
 
       nextChangeAt += FRAME_INTERVAL_MS;
-      if (nextChangeAt < performance.now()) nextChangeAt = performance.now() + Math.max(40, FRAME_INTERVAL_MS - TRANSITION_MS);
+      if (nextChangeAt < performance.now()) nextChangeAt = performance.now() + Math.max(60, FRAME_INTERVAL_MS - TRANSITION_MS);
     }
 
     if (token === playbackToken && route.length > 2) {
-      await sleep(900);
-      const reversed = [...route].reverse();
-      await play(reversed);
+      ui.networkLabel.textContent = 'ルート完了・再スタート';
+      await sleep(1200);
+      if (token === playbackToken) await play(frames);
     }
   }
 
@@ -155,6 +217,7 @@
       params.set('radius', '1200');
     } else {
       params.set('sequence', '6187609');
+      params.set('index', '650');
     }
 
     const response = await fetch(`/api/imagery?${params.toString()}`, { cache: 'no-store' });
@@ -171,7 +234,7 @@
     try {
       await requestWakeLock();
       const data = await fetchRoute();
-      ui.networkLabel.textContent = `0.5秒再生・${data.frames.length}枚`;
+      ui.networkLabel.textContent = `0.5秒・進行方向固定・${data.frames.length}枚`;
       ui.startPanel.hidden = true;
       await play(data.frames);
     } catch (error) {
@@ -195,7 +258,7 @@
   document.addEventListener('visibilitychange', refreshWakeLock);
 
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.2').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.3').catch(() => {}));
   }
 
   console.info(`Streetview Journey v${VERSION}`);
