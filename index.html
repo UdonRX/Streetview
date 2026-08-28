@@ -8,11 +8,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/styles.css?v=0.1.3" />
-  <title>Streetview Journey v0.1.3</title>
+  <link rel="stylesheet" href="/styles.css?v=0.1.4" />
+  <title>Streetview Journey v0.1.4</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.3 -->
+  <!-- Streetview Journey v0.1.4 Smooth Motion -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
@@ -33,7 +33,7 @@
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
         <div class="meta-row">
           <span id="headingLabel">—°</span>
-          <span id="networkLabel">0.5秒・進行方向固定</span>
+          <span id="networkLabel">0.5秒・Smooth Motion</span>
           <span id="coordLabel">—</span>
         </div>
       </section>
@@ -41,12 +41,12 @@
 
     <section id="startPanel" class="start-panel">
       <div class="start-card">
-        <p class="eyebrow">v0.1.3 PSEUDO VIDEO TEST</p>
+        <p class="eyebrow">v0.1.4 SMOOTH MOTION</p>
         <h1>画面を見るだけの旅。</h1>
-        <p class="lead">連続写真の進行方向を画面中央に揃え、0.5秒間隔で疑似動画のようにつなぐテスト版。</p>
+        <p class="lead">80msの短いブレンド、微ブラー、前進ズーム、フレーム位置合わせで「写真が切り替わる感」を抑えるテスト版。</p>
 
         <div class="preset-card">
-          <span class="preset-title">移動区間デモ</span>
+          <span class="preset-title">Smooth Motionデモ</span>
           <strong>Jakarta / KartaView sample sequence</strong>
           <small>sequence #6187609 / index 650付近から連続72枚</small>
         </div>
@@ -77,6 +77,6 @@
     </section>
   </main>
 
-  <script src="/app.js?v=0.1.3" defer></script>
+  <script src="/app.js?v=0.1.4" defer></script>
 </body>
 </html>
