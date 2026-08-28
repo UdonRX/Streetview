@@ -1,10 +1,11 @@
-/* Streetview Journey v0.1.0
- * iPhone Safari/PWA prototype: no interaction is required after playback starts.
+/* Streetview Journey v0.1.2
+ * iPhone Safari/PWA prototype: 0.5 second visual frame cadence after playback starts.
  */
 (() => {
-  const VERSION = '0.1.0';
-  const FRAME_HOLD_MS = 2500;
-  const TRANSITION_MS = 1350;
+  const VERSION = '0.1.2';
+  const FRAME_INTERVAL_MS = 500;
+  const TRANSITION_MS = 340;
+  const PRELOAD_AHEAD = 3;
 
   const $ = (id) => document.getElementById(id);
   const ui = {
@@ -49,6 +50,10 @@
     img.src = frame.url;
   }
 
+  function preloadAhead(index) {
+    for (let offset = 1; offset <= PRELOAD_AHEAD; offset += 1) preload(route[index + offset]);
+  }
+
   function waitForImage(img, src) {
     return new Promise((resolve, reject) => {
       if (img.src === src && img.complete && img.naturalWidth > 0) return resolve();
@@ -73,29 +78,30 @@
     await waitForImage(activeLayer, frame.url);
     activeLayer.style.transform = 'scale(1.01) translate3d(0,0,0)';
     requestAnimationFrame(() => {
-      activeLayer.style.transition = 'opacity 650ms ease';
+      activeLayer.style.transition = 'opacity 260ms ease';
       activeLayer.style.opacity = '1';
     });
-    await sleep(700);
+    await sleep(280);
   }
 
-  async function morphTo(nextFrame, currentFrame) {
+  async function morphTo(nextFrame, currentFrame, nextIndex) {
     const pan = motionX(currentFrame?.heading, nextFrame.heading);
     standbyLayer.style.transition = 'none';
     standbyLayer.style.opacity = '0';
-    standbyLayer.style.transform = `scale(.94) translate3d(${pan * -0.45}px,0,0)`;
+    standbyLayer.style.transform = `scale(.93) translate3d(${pan * -0.45}px,0,0)`;
     await waitForImage(standbyLayer, nextFrame.url);
 
     void standbyLayer.offsetWidth;
-    activeLayer.style.transition = `opacity ${TRANSITION_MS}ms ease, transform ${TRANSITION_MS}ms cubic-bezier(.2,.72,.25,1)`;
-    standbyLayer.style.transition = `opacity ${TRANSITION_MS}ms ease, transform ${TRANSITION_MS}ms cubic-bezier(.2,.72,.25,1)`;
+    activeLayer.style.transition = `opacity ${TRANSITION_MS}ms linear, transform ${TRANSITION_MS}ms cubic-bezier(.2,.72,.25,1)`;
+    standbyLayer.style.transition = `opacity ${TRANSITION_MS}ms linear, transform ${TRANSITION_MS}ms cubic-bezier(.2,.72,.25,1)`;
 
+    updateHud(nextIndex, nextFrame);
     activeLayer.style.opacity = '0';
-    activeLayer.style.transform = `scale(1.11) translate3d(${pan}px,0,0)`;
+    activeLayer.style.transform = `scale(1.13) translate3d(${pan}px,0,0)`;
     standbyLayer.style.opacity = '1';
-    standbyLayer.style.transform = 'scale(1.01) translate3d(0,0,0)';
+    standbyLayer.style.transform = 'scale(1.015) translate3d(0,0,0)';
 
-    await sleep(TRANSITION_MS + 40);
+    await sleep(TRANSITION_MS + 12);
     const old = activeLayer;
     activeLayer = standbyLayer;
     standbyLayer = old;
@@ -108,19 +114,30 @@
 
     ui.placeLabel.textContent = route[0].sequenceId ? `Sequence #${route[0].sequenceId}` : 'KartaView route';
     updateHud(0, route[0]);
+    preloadAhead(0);
     await showFirstFrame(route[0]);
-    preload(route[1]);
+
+    let nextChangeAt = performance.now() + FRAME_INTERVAL_MS;
 
     for (let i = 1; i < route.length && token === playbackToken; i += 1) {
-      await sleep(FRAME_HOLD_MS);
+      const nextFrame = route[i];
+      standbyLayer.style.opacity = '0';
+      await waitForImage(standbyLayer, nextFrame.url);
       if (token !== playbackToken) return;
-      await morphTo(route[i], route[i - 1]);
-      updateHud(i, route[i]);
-      preload(route[i + 1]);
+
+      const remaining = nextChangeAt - performance.now();
+      if (remaining > 0) await sleep(remaining);
+      if (token !== playbackToken) return;
+
+      await morphTo(nextFrame, route[i - 1], i);
+      preloadAhead(i);
+
+      nextChangeAt += FRAME_INTERVAL_MS;
+      if (nextChangeAt < performance.now()) nextChangeAt = performance.now() + Math.max(40, FRAME_INTERVAL_MS - TRANSITION_MS);
     }
 
     if (token === playbackToken && route.length > 2) {
-      await sleep(1800);
+      await sleep(900);
       const reversed = [...route].reverse();
       await play(reversed);
     }
@@ -154,7 +171,7 @@
     try {
       await requestWakeLock();
       const data = await fetchRoute();
-      ui.networkLabel.textContent = `節約モード・${data.frames.length}枚`;
+      ui.networkLabel.textContent = `0.5秒再生・${data.frames.length}枚`;
       ui.startPanel.hidden = true;
       await play(data.frames);
     } catch (error) {
@@ -178,7 +195,7 @@
   document.addEventListener('visibilitychange', refreshWakeLock);
 
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.2').catch(() => {}));
   }
 
   console.info(`Streetview Journey v${VERSION}`);

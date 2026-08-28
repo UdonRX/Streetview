@@ -1,5 +1,5 @@
-/* Streetview Journey v0.1.0 - UI hidden fix cache revision 1 */
-const SHELL_CACHE = 'streetview-shell-v0.1.0-r1';
+/* Streetview Journey v0.1.2 */
+const SHELL_CACHE = 'streetview-shell-v0.1.2';
 const IMAGE_CACHE = 'streetview-images-v0.1.0';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest'];
 const IMAGE_LIMIT = 80;
@@ -50,7 +50,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith((async () => {
       const cache = await caches.open(SHELL_CACHE);
       try {
-        const response = await fetch(request);
+        const response = await fetch(request, { cache: 'no-store' });
         if (response.ok) await cache.put(request, response.clone());
         return response;
       } catch (_) {
