@@ -1,0 +1,10 @@
+{
+  "name": "Streetview Journey",
+  "short_name": "Streetview",
+  "description": "見るだけで進む全自動ストリートビュー旅行",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#05070a",
+  "theme_color": "#05070a",
+  "orientation": "any"
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#05070a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Streetview" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>Streetview Journey v0.1</title>
+</head>
+<body>
+  <!-- Streetview Journey v0.1.0 -->
+  <main id="app" class="app" aria-live="polite">
+    <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
+      <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
+      <img id="layerB" class="scene-layer" alt="" decoding="async" draggable="false" />
+      <div class="vignette"></div>
+      <div class="motion-blur"></div>
+
+      <header class="top-hud">
+        <span class="brand">STREETVIEW JOURNEY</span>
+        <span id="sourceBadge" class="badge">KartaView</span>
+      </header>
+
+      <section class="bottom-hud">
+        <div class="location-row">
+          <span id="placeLabel">Demo route</span>
+          <span id="frameLabel">0 / 0</span>
+        </div>
+        <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+        <div class="meta-row">
+          <span id="headingLabel">—°</span>
+          <span id="networkLabel">節約モード</span>
+          <span id="coordLabel">—</span>
+        </div>
+      </section>
+    </section>
+
+    <section id="startPanel" class="start-panel">
+      <div class="start-card">
+        <p class="eyebrow">v0.1 PROTOTYPE</p>
+        <h1>画面を見るだけの旅。</h1>
+        <p class="lead">静止画をズーム・Pan・クロスフェードでつなぎ、KartaViewの連続写真を自動再生する最小版。</p>
+
+        <div class="preset-card">
+          <span class="preset-title">安定動作デモ</span>
+          <strong>Jakarta / KartaView sample sequence</strong>
+          <small>公式ドキュメント掲載 sequence #6187609</small>
+        </div>
+
+        <details class="custom-route">
+          <summary>緯度・経度から探す</summary>
+          <div class="coord-inputs">
+            <label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label>
+            <label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label>
+          </div>
+          <label class="toggle-row">
+            <input id="useCoordinates" type="checkbox" />
+            <span>この座標付近のsequenceを自動検索</span>
+          </label>
+        </details>
+
+        <button id="startButton" class="start-button" type="button">旅をはじめる</button>
+        <p class="fineprint">開始後は操作不要。Wake Lockが使える環境では画面スリープを防止する。</p>
+      </div>
+    </section>
+
+    <section id="errorPanel" class="error-panel" hidden>
+      <div class="error-card">
+        <strong>旅を開始できなかった</strong>
+        <p id="errorMessage"></p>
+        <button id="retryButton" type="button">もう一度</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
