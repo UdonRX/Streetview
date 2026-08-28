@@ -1,5 +1,5 @@
-/* Streetview Journey v0.1.0 */
-const SHELL_CACHE = 'streetview-shell-v0.1.0';
+/* Streetview Journey v0.1.0 - UI hidden fix cache revision 1 */
+const SHELL_CACHE = 'streetview-shell-v0.1.0-r1';
 const IMAGE_CACHE = 'streetview-images-v0.1.0';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest'];
 const IMAGE_LIMIT = 80;
@@ -10,10 +10,13 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(
-    keys.filter((key) => ![SHELL_CACHE, IMAGE_CACHE].includes(key)).map((key) => caches.delete(key))
-  )));
-  self.clients.claim();
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys
+      .filter((key) => ![SHELL_CACHE, IMAGE_CACHE].includes(key))
+      .map((key) => caches.delete(key)));
+    await self.clients.claim();
+  })());
 });
 
 async function trimImages(cache) {
@@ -44,6 +47,17 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.origin === self.location.origin && !url.pathname.startsWith('/api/')) {
-    event.respondWith(caches.match(request).then((hit) => hit || fetch(request)));
+    event.respondWith((async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      try {
+        const response = await fetch(request);
+        if (response.ok) await cache.put(request, response.clone());
+        return response;
+      } catch (_) {
+        const hit = await cache.match(request);
+        if (hit) return hit;
+        throw _;
+      }
+    })());
   }
 });
