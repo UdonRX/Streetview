@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.21 jsfeat Worker Camera Path */
+/* Streetview Journey v0.1.25 Safety-aware Motion Routing */
 (() => {
-  const VERSION = '0.1.21';
+  const VERSION = '0.1.25';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS=4,TILE_ROWS=5,ANALYSIS_W=80,ANALYSIS_H=120;
   const ROLL_LIMIT=3.0,ROLL_EMA=.13,ROLL_STEP_LIMIT=.22;
@@ -12,7 +12,7 @@
   const ANCHOR_WINDOW_RADIUS=2,CAMERA_WINDOW_RADIUS=3,CAMERA_MIN_TRACKS=8;
   const CAMERA_MAX_STEP_X=5.2,CAMERA_MAX_STEP_Y=4.0;
   const CAMERA_MAX_CORR_X=8.5,CAMERA_MAX_CORR_Y=6.2,CAMERA_MAX_CORR_ROLL=2.4,CAMERA_MIN_SCALE=.980,CAMERA_MAX_SCALE=1.020;
-  const CAMERA_RANSAC_STRONG=.34,CAMERA_RANSAC_BLEND=.14;
+  const CAMERA_RANSAC_STRONG=.34,CAMERA_RANSAC_BLEND=.14,SAFETY_GUARD_STRONG=.58;
   const CANVAS_BOX_SCALE=1.12,CAMERA_ANALYSIS_OVERSCAN=1.045,CAMERA_FOREGROUND_OVERSCAN=1.16,CAMERA_EDGE_FILL_OVERSCAN=1.38;
   const COMPARE_SPEEDS=[80,100,120];
   const WORKER_WAIT_MS=85;
@@ -27,11 +27,11 @@
     if(viewer&&!$('flowCanvas')){const c=document.createElement('canvas');c.id='flowCanvas';c.className='flow-canvas';viewer.querySelector('#layerB')?.insertAdjacentElement('afterend',c);}
     if(viewer&&!$('journeyBack')){const b=document.createElement('button');b.id='journeyBack';b.className='journey-back';b.type='button';b.hidden=true;b.setAttribute('aria-label','トップ画面に戻る');b.innerHTML='<span aria-hidden="true">‹</span> 戻る';viewer.appendChild(b);}
     if(card){
-      card.querySelector('.eyebrow').textContent='v0.1.21 PHASE 1.3 JSFEAT WORKER';
-      card.querySelector('h1').textContent='0.08秒のまま、解析を画面から切り離す。';
-      card.querySelector('.lead').textContent='OpenCVを撤去し、jsfeatの特徴点追跡・Forward/Backward・Similarity RANSACをWeb Workerで実行。解析が遅くてもJourneyはFar-fieldで止まらず進む。';
+      card.querySelector('.eyebrow').textContent='v0.1.25 PHASE 1.3.5 SAFETY ROUTING';
+      card.querySelector('h1').textContent='0.08秒のまま、危険な推定だけFar-fieldへ寄せる。';
+      card.querySelector('.lead').textContent='Safety Gateで警告されたRANSACは直採用せず、信頼度に応じてFar-fieldとBlend。通常区間のRANSACはそのまま維持する。';
       const p=card.querySelector('.preset-card');
-      if(p){p.querySelector('.preset-title').textContent='Phase 1.3 jsfeat Worker Camera Path';p.querySelector('strong').textContent='Jakarta / KartaView sample sequence';p.querySelector('small').textContent='jsfeat Worker + Similarity RANSAC + Scene-axis + 4×5 Tile Flow / 0.08秒標準';}
+      if(p){p.querySelector('.preset-title').textContent='Phase 1.3.5 Safety-aware Motion Routing';p.querySelector('strong').textContent='Jakarta / KartaView sample sequence';p.querySelector('small').textContent='jsfeat Worker + Safety-aware RANSAC/Blend/Far-field + 4×5 Tile Flow / 0.08秒標準';}
       document.querySelector('.speed-lab')?.remove();
       const compare=new URLSearchParams(location.search).get('compare')==='1',lab=document.createElement('div');lab.className='speed-lab';
       const opts=compare?COMPARE_SPEEDS.map(ms=>`<label><input type="radio" name="driveSpeed" value="${ms}" ${ms===80?'checked':''}><span>${(ms/1000).toFixed(2)}秒<small>${ms===80?'標準':'比較'}</small></span></label>`).join(''):'<label><input type="radio" name="driveSpeed" value="80" checked><span>0.08秒<small>標準</small></span></label>';
@@ -45,14 +45,14 @@
   const ui={viewer:$('viewer'),a:$('layerA'),b:$('layerB'),canvas:$('flowCanvas'),back:$('journeyBack'),edgeBlur:document.querySelector('.motion-blur'),start:$('startPanel'),error:$('errorPanel'),startBtn:$('startButton'),retry:$('retryButton'),err:$('errorMessage'),bar:$('progressBar'),num:$('frameLabel'),place:$('placeLabel'),heading:$('headingLabel'),coord:$('coordLabel'),net:$('networkLabel'),lat:$('latInput'),lng:$('lngInput'),coords:$('useCoordinates')};
   let route=[],token=0,wake=null,speedMs=80,ctx=null,canvasDpr=1,canvasSignature='',currentImage=null,colorCanvas=null,colorCtx=null,weightCanvas=null,weightCtx=null,fallbackCanvas=null,fallbackCtx=null,outputImage=null;
   const renderCache=new Map(),corsCache=new Map(),grayCache=new Map(),rollRawCache=new Map(),rollSmoothCache=new Map(),correctedGrayCache=new Map(),farPairCache=new Map(),workerPairCache=new Map(),motionPairCache=new Map(),rawTrajectoryCache=new Map(),cameraPoseCache=new Map(),stabilizedGrayCache=new Map(),tileCache=new Map(),blendAssetCache=new Map(),anchorCache=new Map();
-  const diag=window.__journeyDiagnostics={version:VERSION,engine:'jsfeat-worker',worker:'starting',workerReady:false,workerError:null,lastWorkerPair:null,lastPose:null,lastPairMs:0,cameraSamples:0,averageConfidence:0,pairSamples:0,averagePairMs:0,ransacSamples:0,averageRansacInlierRatio:0,averageCoverage:0};
+  const diag=window.__journeyDiagnostics={version:VERSION,engine:'jsfeat-worker',worker:'starting',workerReady:false,workerError:null,lastWorkerPair:null,lastMotionRoute:null,lastPose:null,lastPairMs:0,cameraSamples:0,averageConfidence:0,pairSamples:0,averagePairMs:0,ransacSamples:0,averageRansacInlierRatio:0,averageCoverage:0};
 
   let motionWorker=null,workerReady=false,workerSeq=0;
   const workerPending=new Map();
   function ensureMotionWorker(){
     if(motionWorker) return;
     try{
-      motionWorker=new Worker('/motion-worker.js?v=0.1.21');
+      motionWorker=new Worker('/motion-worker.js?v=0.1.25');
       diag.worker='loading';
       motionWorker.onmessage=e=>{
         const m=e.data||{};
@@ -90,7 +90,7 @@
   function resetBridge(){ui.edgeBlur?.style.setProperty('--drive-blur','.85px');}
 
   function loadRender(url){if(!renderCache.has(url))renderCache.set(url,new Promise((res,rej)=>{const im=new Image();im.decoding='async';im.referrerPolicy='no-referrer';im.onload=()=>res(im);im.onerror=()=>rej(new Error('画像を読み込めませんでした'));im.src=url;}));return renderCache.get(url);}
-  function loadCors(url){if(!corsCache.has(url))corsCache.set(url,new Promise(res=>{const im=new Image();im.crossOrigin='anonymous';im.referrerPolicy='no-referrer';im.onload=()=>res(im);im.onerror=()=>res(null);im.src=`${url}${url.includes('?')?'&':'?'}analysis=v0121`;}));return corsCache.get(url);}
+  function loadCors(url){if(!corsCache.has(url))corsCache.set(url,new Promise(res=>{const im=new Image();im.crossOrigin='anonymous';im.referrerPolicy='no-referrer';im.onload=()=>res(im);im.onerror=()=>res(null);im.src=`${url}${url.includes('?')?'&':'?'}analysis=v0125`;}));return corsCache.get(url);}
   function makeCanvas(w,h,alpha){const c=document.createElement('canvas');c.width=w;c.height=h;return{canvas:c,ctx:c.getContext('2d',{alpha,willReadFrequently:true})};}
   function canvasSize(){const dpr=Math.min(window.devicePixelRatio||1,1),w=Math.round((window.innerWidth||390)*CANVAS_BOX_SCALE*dpr),h=Math.round((window.innerHeight||844)*CANVAS_BOX_SCALE*dpr);if(ui.canvas.width!==w||ui.canvas.height!==h){ui.canvas.width=w;ui.canvas.height=h;}ctx=ui.canvas.getContext('2d',{alpha:false,willReadFrequently:true});canvasDpr=dpr;const sig=`${w}x${h}@${dpr}`;if(sig!==canvasSignature){canvasSignature=sig;blendAssetCache.clear();const nw=Math.max(160,Math.round(w*NORMALIZE_SCALE)),nh=Math.max(260,Math.round(h*NORMALIZE_SCALE));({canvas:colorCanvas,ctx:colorCtx}=makeCanvas(nw,nh,false));({canvas:weightCanvas,ctx:weightCtx}=makeCanvas(nw,nh,false));({canvas:fallbackCanvas,ctx:fallbackCtx}=makeCanvas(nw,nh,false));outputImage=colorCtx.createImageData(nw,nh);}return{w,h,dpr};}
   function coverRect(c,im,a){const cw=c.width,ch=c.height,r=Math.max(cw/im.naturalWidth,ch/im.naturalHeight),dw=im.naturalWidth*r,dh=im.naturalHeight*r;return{x:(cw-dw)*a/100,y:(ch-dh)/2,w:dw,h:dh};}
@@ -124,7 +124,26 @@
     })();
     workerPairCache.set(i,p);return p;
   }
-  async function motionPair(i){if(motionPairCache.has(i))return motionPairCache.get(i);const p=(async()=>{const [wp,far]=await Promise.all([workerFeaturePair(i),farPair(i)]);if(wp.confidence>=CAMERA_RANSAC_STRONG)return wp;if(wp.confidence>=CAMERA_RANSAC_BLEND&&wp.tracks>=CAMERA_MIN_TRACKS){const dis=Math.hypot(wp.dx-far.dx,wp.dy-far.dy);let w=clamp(.38+(wp.confidence-CAMERA_RANSAC_BLEND)/Math.max(.001,CAMERA_RANSAC_STRONG-CAMERA_RANSAC_BLEND)*.48,.38,.86);if(dis>4.5&&wp.confidence<.50)w*=.75;return{dx:clamp(wp.dx*w+far.dx*(1-w),-CAMERA_MAX_STEP_X,CAMERA_MAX_STEP_X),dy:clamp(wp.dy*w+far.dy*(1-w),-CAMERA_MAX_STEP_Y,CAMERA_MAX_STEP_Y),roll:wp.roll*w,logScale:wp.logScale*w,confidence:clamp(Math.max(wp.confidence*.92,far.confidence*.60),0,1),tracks:wp.tracks,source:'blend',inlierRatio:wp.inlierRatio||0,coverage:wp.coverage||0};}return{dx:clamp(far.dx,-CAMERA_MAX_STEP_X,CAMERA_MAX_STEP_X),dy:clamp(far.dy,-CAMERA_MAX_STEP_Y,CAMERA_MAX_STEP_Y),roll:0,logScale:0,confidence:clamp(far.confidence*.58,0,.35),tracks:wp.tracks||0,source:'far',inlierRatio:wp.inlierRatio||0,coverage:wp.coverage||0};})();motionPairCache.set(i,p);return p;}
+  function routeMotion(i,out,wp,weight){diag.lastMotionRoute={frame:i,source:out.source,weight,workerConfidence:wp.confidence,safetyFactor:Number.isFinite(wp.safetyFactor)?wp.safetyFactor:1,safetyFlags:wp.safetyFlags||''};return out;}
+  async function motionPair(i){
+    if(motionPairCache.has(i))return motionPairCache.get(i);
+    const p=(async()=>{
+      const [wp,far]=await Promise.all([workerFeaturePair(i),farPair(i)]);
+      const sf=Number.isFinite(wp.safetyFactor)?clamp(wp.safetyFactor,0,1):1,guarded=sf<.95,strongGate=guarded?SAFETY_GUARD_STRONG:CAMERA_RANSAC_STRONG;
+      if(wp.confidence>=strongGate)return routeMotion(i,wp,wp,1);
+      if(wp.confidence>=CAMERA_RANSAC_BLEND&&wp.tracks>=CAMERA_MIN_TRACKS){
+        const dis=Math.hypot(wp.dx-far.dx,wp.dy-far.dy);
+        let w=clamp(.38+(wp.confidence-CAMERA_RANSAC_BLEND)/Math.max(.001,CAMERA_RANSAC_STRONG-CAMERA_RANSAC_BLEND)*.48,.38,.86);
+        if(guarded)w*=clamp(sf,.30,.82);
+        if(dis>4.5&&wp.confidence<.50)w*=.75;
+        const out={dx:clamp(wp.dx*w+far.dx*(1-w),-CAMERA_MAX_STEP_X,CAMERA_MAX_STEP_X),dy:clamp(wp.dy*w+far.dy*(1-w),-CAMERA_MAX_STEP_Y,CAMERA_MAX_STEP_Y),roll:wp.roll*w,logScale:wp.logScale*w,confidence:clamp(Math.max(wp.confidence*.92,far.confidence*.60),0,1),tracks:wp.tracks,source:'blend',inlierRatio:wp.inlierRatio||0,coverage:wp.coverage||0,safetyFactor:sf,safetyFlags:wp.safetyFlags||''};
+        return routeMotion(i,out,wp,w);
+      }
+      const out={dx:clamp(far.dx,-CAMERA_MAX_STEP_X,CAMERA_MAX_STEP_X),dy:clamp(far.dy,-CAMERA_MAX_STEP_Y,CAMERA_MAX_STEP_Y),roll:0,logScale:0,confidence:clamp(far.confidence*.58,0,.35),tracks:wp.tracks||0,source:'far',inlierRatio:wp.inlierRatio||0,coverage:wp.coverage||0,safetyFactor:sf,safetyFlags:wp.safetyFlags||''};
+      return routeMotion(i,out,wp,0);
+    })();
+    motionPairCache.set(i,p);return p;
+  }
   function rawTrajectory(i){if(rawTrajectoryCache.has(i))return rawTrajectoryCache.get(i);const p=(async()=>{if(i<=0)return{x:0,y:0,roll:0,logScale:0,confidence:1};const[prev,pair]=await Promise.all([rawTrajectory(i-1),motionPair(i-1)]);return{x:prev.x+pair.dx,y:prev.y+pair.dy,roll:prev.roll+pair.roll,logScale:prev.logScale+pair.logScale,confidence:pair.confidence};})();rawTrajectoryCache.set(i,p);return p;}
   function cameraPose(i){if(cameraPoseCache.has(i))return cameraPoseCache.get(i);const p=(async()=>{const start=Math.max(0,i-CAMERA_WINDOW_RADIUS),end=Math.min(route.length-1,i+CAMERA_WINDOW_RADIUS),inds=[];for(let k=start;k<=end;k++)inds.push(k);const list=await Promise.all(inds.map(rawTrajectory)),raw=await rawTrajectory(i);let sx=0,sy=0,sr=0,ss=0,sw=0;for(let n=0;n<list.length;n++){const d=Math.abs(inds[n]-i),w=d===0?6:d===1?4:d===2?2:1;sx+=list[n].x*w;sy+=list[n].y*w;sr+=list[n].roll*w;ss+=list[n].logScale*w;sw+=w;}const sm={x:sx/sw,y:sy/sw,roll:sr/sw,logScale:ss/sw},prom=[];for(let k=Math.max(0,i-3);k<Math.min(route.length-1,i+3);k++)prom.push(motionPair(k));const pairs=await Promise.all(prom),conf=pairs.length?pairs.reduce((s,p)=>s+p.confidence,0)/pairs.length:0,rs=pairs.filter(p=>p.source==='ransac'||p.source==='blend').length,share=pairs.length?rs/pairs.length:0,pose={x:clamp(sm.x-raw.x,-CAMERA_MAX_CORR_X,CAMERA_MAX_CORR_X),y:clamp(sm.y-raw.y,-CAMERA_MAX_CORR_Y,CAMERA_MAX_CORR_Y),roll:clamp(sm.roll-raw.roll,-CAMERA_MAX_CORR_ROLL,CAMERA_MAX_CORR_ROLL),scale:clamp(Math.exp(sm.logScale-raw.logScale),CAMERA_MIN_SCALE,CAMERA_MAX_SCALE),confidence:conf,ransacShare:share,source:workerReady&&share>=.50?'ransac':'mixed'};diag.lastPose={...pose,frame:i};diag.cameraSamples++;diag.averageConfidence+=(conf-diag.averageConfidence)/diag.cameraSamples;return pose;})();cameraPoseCache.set(i,p);return p;}
   async function stabilizedGray(i){if(stabilizedGrayCache.has(i))return stabilizedGrayCache.get(i);const p=(async()=>{const im=await loadCors(route[i].url);if(!im)return null;const[roll,pose]=await Promise.all([smoothRoll(i),cameraPose(i)]),c=document.createElement('canvas');c.width=ANALYSIS_W;c.height=ANALYSIS_H;const g=c.getContext('2d',{willReadFrequently:true});g.fillStyle='#111';g.fillRect(0,0,ANALYSIS_W,ANALYSIS_H);drawBase(g,im,i,roll,pose,1,'analysis');try{const d=g.getImageData(0,0,ANALYSIS_W,ANALYSIS_H).data,o=new Float32Array(ANALYSIS_W*ANALYSIS_H);for(let k=0,j=0;k<o.length;k++,j+=4)o[k]=d[j]*.299+d[j+1]*.587+d[j+2]*.114;return o;}catch{return null;}})();stabilizedGrayCache.set(i,p);return p;}
@@ -148,11 +167,11 @@
   async function showFirst(){const im=await loadRender(route[0].url),first=await createFirstFrame(im,0);canvasSize();ctx.drawImage(first.canvas,0,0);ui.canvas.style.opacity='1';ui.a.style.opacity=ui.b.style.opacity='0';ui.edgeBlur?.classList.add('drive-stabilized');resetBridge();currentImage=im;updateHud(0,first.roll,first.pose);}
   async function animatePair(i){const ps=performance.now(),next=await loadRender(route[i+1].url),[ai,bi,vs]=await Promise.all([createStabilizedFrame(currentImage,i),createStabilizedFrame(next,i+1),tileVectors(i)]),a=ai.canvas,b=bi.canvas,la=prepareTileLayers(a),lb=prepareTileLayers(b),bs=perceptualBridgeStrength(i),fast=speedMs===80,duration=fast?80:Math.max(88,Math.round(speedMs*.92)),minMs=1000/(fast?FAST_80_FPS:NORMALIZE_FPS),start=performance.now();let last=-Infinity;await new Promise(resolve=>{function tick(now){const t=clamp((now-start)/duration,0,1);if(t>=1||now-last>=minMs){setBridge(t,bs);try{normalizeAccumulation(a,b,la,lb,vs,t,bs);}catch{ctx.globalAlpha=1;ctx.drawImage(a,0,0);ctx.globalAlpha=t;ctx.drawImage(b,0,0);ctx.globalAlpha=1;}last=now;}if(t<1)requestAnimationFrame(tick);else resolve();}requestAnimationFrame(tick);});resetBridge();ctx.globalAlpha=1;ctx.drawImage(b,0,0);currentImage=next;const elapsed=performance.now()-ps;diag.lastPairMs=elapsed;diag.pairSamples++;diag.averagePairMs+=(elapsed-diag.averagePairMs)/diag.pairSamples;updateHud(i+1,bi.roll,bi.pose);}
 
-  function clearJourneyCaches(){[renderCache,corsCache,grayCache,rollRawCache,rollSmoothCache,correctedGrayCache,farPairCache,workerPairCache,motionPairCache,rawTrajectoryCache,cameraPoseCache,stabilizedGrayCache,tileCache,blendAssetCache,anchorCache].forEach(c=>c.clear());Object.assign(diag,{lastWorkerPair:null,lastPose:null,cameraSamples:0,averageConfidence:0,pairSamples:0,averagePairMs:0,ransacSamples:0,averageRansacInlierRatio:0,averageCoverage:0});}
+  function clearJourneyCaches(){[renderCache,corsCache,grayCache,rollRawCache,rollSmoothCache,correctedGrayCache,farPairCache,workerPairCache,motionPairCache,rawTrajectoryCache,cameraPoseCache,stabilizedGrayCache,tileCache,blendAssetCache,anchorCache].forEach(c=>c.clear());Object.assign(diag,{lastWorkerPair:null,lastMotionRoute:null,lastPose:null,cameraSamples:0,averageConfidence:0,pairSamples:0,averagePairMs:0,ransacSamples:0,averageRansacInlierRatio:0,averageCoverage:0});}
   async function play(frames){const playToken=++token;route=frames;clearJourneyCaches();if(!route.length)throw new Error('再生できる画像がありません');ui.place.textContent=route[0].sequenceId?`Sequence #${route[0].sequenceId}`:'KartaView route';await showFirst();warmAhead(0);await sleep(60);let nextAt=performance.now()+speedMs;for(let i=0;i<route.length-1&&playToken===token;i++){warmAhead(i+1);const rem=nextAt-performance.now();if(rem>0)await sleep(rem);if(playToken!==token)return;await animatePair(i);nextAt+=speedMs;if(nextAt<performance.now())nextAt=performance.now()+Math.max(8,speedMs*.10);}if(playToken===token){ui.net.textContent=`${(speedMs/1000).toFixed(2)}秒・再スタート`;await sleep(500);if(playToken===token)play(frames);}}
   async function fetchRoute(){const p=new URLSearchParams({source:'karta'});if(ui.coords.checked){const lat=Number(ui.lat.value),lng=Number(ui.lng.value);if(!Number.isFinite(lat)||!Number.isFinite(lng))throw new Error('緯度・経度を確認してください');p.set('lat',String(lat));p.set('lng',String(lng));p.set('radius','1200');}else{p.set('sequence','6187609');p.set('index','650');}const r=await fetch(`/api/imagery?${p}`,{cache:'no-store'}),d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`API error ${r.status}`);if(!Array.isArray(d.frames)||d.frames.length<2)throw new Error('連続して再生できる写真が見つかりませんでした');return d;}
   async function requestWakeLock(){if(!('wakeLock'in navigator))return;try{wake=await navigator.wakeLock.request('screen');}catch{}}
   async function start(){ui.startBtn.disabled=true;ui.startBtn.textContent='旅を準備中…';ui.error.hidden=true;speedMs=Number(document.querySelector('input[name="driveSpeed"]:checked')?.value||80);try{const wakeP=requestWakeLock();const d=await fetchRoute();ui.start.hidden=true;ui.back.hidden=false;ui.startBtn.disabled=false;ui.startBtn.textContent='旅をはじめる';wakeP.catch(()=>{});await play(d.frames);}catch(e){ui.edgeBlur?.classList.remove('drive-stabilized');resetBridge();ui.canvas.style.opacity='0';ui.back.hidden=true;ui.err.textContent=e?.message||'不明なエラーが発生しました';ui.error.hidden=false;ui.start.hidden=true;ui.startBtn.disabled=false;ui.startBtn.textContent='旅をはじめる';}}
   async function reset(){token++;ui.edgeBlur?.classList.remove('drive-stabilized');resetBridge();ui.canvas.style.opacity='0';ui.back.hidden=true;ui.error.hidden=true;ui.start.hidden=false;currentImage=null;try{await wake?.release?.();}catch{}wake=null;}
-  ui.startBtn.addEventListener('click',start);ui.retry.addEventListener('click',reset);ui.back.addEventListener('click',reset);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&(!wake||wake.released)&&ui.start.hidden)requestWakeLock();});if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js?v=0.1.21').catch(()=>{}));console.info(`Streetview Journey v${VERSION}`);
+  ui.startBtn.addEventListener('click',start);ui.retry.addEventListener('click',reset);ui.back.addEventListener('click',reset);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&(!wake||wake.released)&&ui.start.hidden)requestWakeLock();});if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js?v=0.1.25').catch(()=>{}));console.info(`Streetview Journey v${VERSION}`);
 })();
