@@ -1,6 +1,7 @@
-/* Streetview Journey v0.1.13 Smooth 80ms Far-field Horizon Lock */
+/* Streetview Journey v0.1.14 Phase 1 Multi-frame Camera Path */
 (() => {
-  const VERSION = '0.1.13';
+  const VERSION = '0.1.14';
+  const OPENCV_URL = 'https://docs.opencv.org/4.x/opencv.js';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS = 4;
   const TILE_ROWS = 5;
@@ -30,12 +31,19 @@
   const FAR_SEARCH_X = 5;
   const FAR_SEARCH_Y = 4;
   const FAR_MIN_CONFIDENCE = 0.018;
-  const FAR_LOCK_GAIN = 0.72;
-  const FAR_LOCK_DECAY = 0.94;
-  const FAR_LOCK_MAX_X = 5.2;
-  const FAR_LOCK_MAX_Y = 3.2;
-  const FAR_LOCK_STEP_X = 1.15;
-  const FAR_LOCK_STEP_Y = 0.82;
+  const CAMERA_WINDOW_RADIUS = 2;
+  const CAMERA_MIN_TRACKS = 8;
+  const CAMERA_TARGET_TRACKS = 24;
+  const CAMERA_MAX_STEP_X = 4.0;
+  const CAMERA_MAX_STEP_Y = 3.0;
+  const CAMERA_MAX_STEP_ROLL = 1.0;
+  const CAMERA_MAX_STEP_LOG_SCALE = 0.018;
+  const CAMERA_MAX_CORR_X = 5.8;
+  const CAMERA_MAX_CORR_Y = 4.0;
+  const CAMERA_MAX_CORR_ROLL = 1.7;
+  const CAMERA_MIN_SCALE = 0.985;
+  const CAMERA_MAX_SCALE = 1.015;
+  const CAMERA_CV_MIN_CONFIDENCE = 0.10;
 
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,6 +51,12 @@
   const rad = (value) => value * Math.PI / 180;
   const deg = (value) => value * 180 / Math.PI;
   const cosineRamp = (t) => .5 - .5 * Math.cos(Math.PI * clamp(t, 0, 1));
+  const median = (values) => {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
 
   function installUI() {
     const viewer = $('viewer');
@@ -56,23 +70,23 @@
     $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.13 SMOOTH 80MS FAR-FIELD LOCK';
-      card.querySelector('h1').textContent = '速さを残して、パラパラ感を減らす。';
-      card.querySelector('.lead').textContent = '0.05秒を0.08秒へ変更。実時間80msの中でFar-field Lock・Tile Flow・Normalized Blend・Perceptual Bridgeを通し、描画機会を増やして連続運動として見えやすくする比較版。';
+      card.querySelector('.eyebrow').textContent = 'v0.1.14 PHASE 1 CAMERA PATH';
+      card.querySelector('h1').textContent = '0.08秒のまま、カメラの軌道を滑らかに。';
+      card.querySelector('.lead').textContent = 'OpenCV.jsで複数フレームの背景特徴を追跡し、X/Y・傾き・微小ズームを仮想カメラ軌道として平滑化。既存のFar-field / Tile Flowはフォールバックとして残すPhase 1。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Smooth 80ms Far-field Lockデモ';
+        preset.querySelector('.preset-title').textContent = 'Phase 1 Multi-frame Camera Path';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '遠景Anchor + Horizon/Vanishing Lock + 4×5 Tile Flow / 0.08・0.10・0.12秒比較';
+        preset.querySelector('small').textContent = 'OpenCV feature tracking + Scene-axis + 4×5 Tile Flow / 0.08秒を標準';
       }
       document.querySelector('.speed-lab')?.remove();
       const lab = document.createElement('div');
       lab.className = 'speed-lab';
       lab.innerHTML = `
-        <div class="speed-title"><strong>B 自転車・ドライブ風</strong><small>再生速度を比較</small></div>
+        <div class="speed-title"><strong>Journey Engine</strong><small>0.08秒を基準に改善</small></div>
         <div class="speed-grid">
-          <label><input type="radio" name="driveSpeed" value="80"><span>0.08秒<small>高速・滑らか</small></span></label>
-          <label><input type="radio" name="driveSpeed" value="100" checked><span>0.10秒<small>標準</small></span></label>
+          <label><input type="radio" name="driveSpeed" value="80" checked><span>0.08秒<small>標準</small></span></label>
+          <label><input type="radio" name="driveSpeed" value="100"><span>0.10秒<small>比較</small></span></label>
           <label><input type="radio" name="driveSpeed" value="120"><span>0.12秒<small>比較</small></span></label>
         </div>`;
       preset?.insertAdjacentElement('beforebegin', lab);
@@ -109,7 +123,7 @@
   let route = [];
   let token = 0;
   let wake = null;
-  let speedMs = 100;
+  let speedMs = 80;
   let ctx = null;
   let canvasDpr = 1;
   let canvasSignature = '';
@@ -118,19 +132,88 @@
   let weightCanvas = null, weightCtx = null;
   let fallbackCanvas = null, fallbackCtx = null;
   let outputImage = null;
+  let cvReady = false;
+  let cvLoadPromise = null;
 
   const renderCache = new Map();
   const corsCache = new Map();
   const grayCache = new Map();
-  const farEdgeCache = new Map();
   const rollRawCache = new Map();
   const rollSmoothCache = new Map();
   const correctedGrayCache = new Map();
   const farPairCache = new Map();
-  const farLockCache = new Map();
+  const cvPairCache = new Map();
+  const motionPairCache = new Map();
+  const rawTrajectoryCache = new Map();
+  const cameraPoseCache = new Map();
   const stabilizedGrayCache = new Map();
   const tileCache = new Map();
   const blendAssetCache = new Map();
+
+  window.__journeyDiagnostics = {
+    version: VERSION,
+    opencv: 'loading',
+    lastPose: null,
+    lastPairMs: 0,
+    cameraSamples: 0,
+    averageConfidence: 0,
+    pairSamples: 0,
+    averagePairMs: 0
+  };
+
+  function ensureOpenCV() {
+    if (window.cv?.Mat && window.cv?.goodFeaturesToTrack && window.cv?.calcOpticalFlowPyrLK) {
+      cvReady = true;
+      window.__journeyDiagnostics.opencv = 'ready';
+      return Promise.resolve(window.cv);
+    }
+    if (cvLoadPromise) return cvLoadPromise;
+    cvLoadPromise = new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        cvReady = Boolean(value?.Mat && value?.goodFeaturesToTrack && value?.calcOpticalFlowPyrLK);
+        window.__journeyDiagnostics.opencv = cvReady ? 'ready' : 'fallback';
+        resolve(cvReady ? value : null);
+      };
+      const detect = () => {
+        const candidate = window.cv;
+        if (candidate?.Mat && candidate?.goodFeaturesToTrack && candidate?.calcOpticalFlowPyrLK) {
+          finish(candidate);
+          return true;
+        }
+        if (candidate?.then) {
+          candidate.then((value) => {
+            window.cv = value;
+            finish(value);
+          }).catch(() => finish(null));
+          return true;
+        }
+        return false;
+      };
+      if (detect()) return;
+      let script = document.querySelector('script[data-journey-opencv]');
+      if (!script) {
+        script = document.createElement('script');
+        script.src = OPENCV_URL;
+        script.async = true;
+        script.dataset.journeyOpencv = '1';
+        document.head.appendChild(script);
+      }
+      const started = performance.now();
+      const poll = () => {
+        if (settled || detect()) return;
+        if (performance.now() - started > 15000) return finish(null);
+        setTimeout(poll, 60);
+      };
+      script.addEventListener('error', () => finish(null), { once: true });
+      poll();
+    });
+    return cvLoadPromise;
+  }
+  const opencvWithin = (ms) => Promise.race([ensureOpenCV(), sleep(ms).then(() => null)]);
+  ensureOpenCV().catch(() => {});
 
   function angle(a, b) {
     if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
@@ -237,7 +320,7 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v0113`;
+        img.src = `${url}${sep}analysis=v0114`;
       }));
     }
     return corsCache.get(url);
@@ -276,16 +359,20 @@
     const dw = image.naturalWidth * ratio, dh = image.naturalHeight * ratio;
     return { x: (cw - dw) * anchorPercent / 100, y: (ch - dh) / 2, w: dw, h: dh };
   }
-  function drawBase(targetCtx, image, i, rollDeg, lock = null, alpha = 1) {
+  function drawBase(targetCtx, image, i, rollDeg, pose = null, alpha = 1) {
     const rect = coverRect(targetCtx.canvas, image, anchorX(i));
-    const lx = lock ? lock.x * targetCtx.canvas.width / ANALYSIS_W : 0;
-    const ly = lock ? lock.y * targetCtx.canvas.height / ANALYSIS_H : 0;
+    const px = pose ? pose.x * targetCtx.canvas.width / ANALYSIS_W : 0;
+    const py = pose ? pose.y * targetCtx.canvas.height / ANALYSIS_H : 0;
+    const scale = pose?.scale || 1;
+    const cx = targetCtx.canvas.width / 2;
+    const cy = targetCtx.canvas.height / 2;
     targetCtx.save();
     targetCtx.globalAlpha = alpha;
-    targetCtx.translate(lx, ly);
-    targetCtx.translate(targetCtx.canvas.width / 2, targetCtx.canvas.height / 2);
-    targetCtx.rotate(rad(rollDeg));
-    targetCtx.translate(-targetCtx.canvas.width / 2, -targetCtx.canvas.height / 2);
+    targetCtx.translate(px, py);
+    targetCtx.translate(cx, cy);
+    targetCtx.rotate(rad(rollDeg + (pose?.roll || 0)));
+    targetCtx.scale(scale, scale);
+    targetCtx.translate(-cx, -cy);
     targetCtx.drawImage(image, rect.x, rect.y, rect.w, rect.h);
     targetCtx.restore();
   }
@@ -322,13 +409,6 @@
       }
     }
     return out;
-  }
-
-  async function farEdge(i) {
-    if (farEdgeCache.has(i)) return farEdgeCache.get(i);
-    const promise = analysisGray(i).then(edgeMap);
-    farEdgeCache.set(i, promise);
-    return promise;
   }
 
   async function rawRoll(i) {
@@ -439,23 +519,161 @@
     return promise;
   }
 
-  function farLock(i) {
-    if (farLockCache.has(i)) return farLockCache.get(i);
+  function grayToCvMat(cv, gray) {
+    const bytes = new Uint8Array(gray.length);
+    for (let i = 0; i < gray.length; i += 1) bytes[i] = clamp(Math.round(gray[i]), 0, 255);
+    return cv.matFromArray(ANALYSIS_H, ANALYSIS_W, cv.CV_8UC1, bytes);
+  }
+
+  async function cvFeaturePair(i) {
+    if (cvPairCache.has(i)) return cvPairCache.get(i);
     const promise = (async () => {
-      if (i <= 0) return { x: 0, y: 0, confidence: 1 };
-      const [prev, pair] = await Promise.all([farLock(i - 1), farPair(i - 1)]);
-      const gain = FAR_LOCK_GAIN * clamp(pair.confidence / 0.12, 0.25, 1);
-      const corrX = -pair.dx * gain;
-      const corrY = -pair.dy * gain;
-      const targetX = clamp((prev.x + corrX) * FAR_LOCK_DECAY, -FAR_LOCK_MAX_X, FAR_LOCK_MAX_X);
-      const targetY = clamp((prev.y + corrY) * FAR_LOCK_DECAY, -FAR_LOCK_MAX_Y, FAR_LOCK_MAX_Y);
+      const cv = await opencvWithin(350);
+      const [ga, gb] = await Promise.all([correctedGray(i), correctedGray(i + 1)]);
+      if (!cv || !ga || !gb) return { dx: 0, dy: 0, roll: 0, logScale: 0, confidence: 0, tracks: 0, source: 'fallback' };
+      let a, b, p0, p1, st, err, mask;
+      try {
+        a = grayToCvMat(cv, ga);
+        b = grayToCvMat(cv, gb);
+        p0 = new cv.Mat(); p1 = new cv.Mat(); st = new cv.Mat(); err = new cv.Mat();
+        mask = cv.Mat.zeros(ANALYSIS_H, ANALYSIS_W, cv.CV_8UC1);
+        const roi = mask.roi(new cv.Rect(4, 7, ANALYSIS_W - 8, ANALYSIS_H - 34));
+        roi.setTo(new cv.Scalar(255)); roi.delete();
+        cv.goodFeaturesToTrack(a, p0, 90, 0.015, 4, mask, 5, false, 0.04);
+        if (!p0.rows || p0.rows < CAMERA_MIN_TRACKS) return { dx: 0, dy: 0, roll: 0, logScale: 0, confidence: 0, tracks: p0.rows || 0, source: 'fallback' };
+        const winSize = new cv.Size(15, 15);
+        const criteria = new cv.TermCriteria(cv.TermCriteria_COUNT + cv.TermCriteria_EPS, 12, 0.03);
+        cv.calcOpticalFlowPyrLK(a, b, p0, p1, st, err, winSize, 2, criteria);
+        const tracked = [];
+        for (let n = 0; n < p0.rows; n += 1) {
+          if (!st.data[n]) continue;
+          const x0 = p0.data32F[n * 2], y0 = p0.data32F[n * 2 + 1];
+          const x1 = p1.data32F[n * 2], y1 = p1.data32F[n * 2 + 1];
+          const e = Number.isFinite(err.data32F?.[n]) ? err.data32F[n] : 0;
+          if (![x0, y0, x1, y1].every(Number.isFinite)) continue;
+          if (x1 < 1 || x1 >= ANALYSIS_W - 1 || y1 < 1 || y1 >= ANALYSIS_H - 1) continue;
+          if (e > 55) continue;
+          tracked.push({ x0, y0, x1, y1, dx: x1 - x0, dy: y1 - y0, e });
+        }
+        if (tracked.length < CAMERA_MIN_TRACKS) return { dx: 0, dy: 0, roll: 0, logScale: 0, confidence: 0, tracks: tracked.length, source: 'fallback' };
+        const mdx = median(tracked.map((p) => p.dx));
+        const mdy = median(tracked.map((p) => p.dy));
+        const deviations = tracked.map((p) => Math.hypot(p.dx - mdx, p.dy - mdy));
+        const mad = Math.max(0.65, median(deviations));
+        const inliers = tracked.filter((p, idx) => deviations[idx] <= Math.max(1.6, mad * 2.6));
+        if (inliers.length < CAMERA_MIN_TRACKS) return { dx: mdx, dy: mdy, roll: 0, logScale: 0, confidence: 0.05, tracks: inliers.length, source: 'cv-low' };
+        const ax = median(inliers.map((p) => p.x0));
+        const ay = median(inliers.map((p) => p.y0));
+        const bx = median(inliers.map((p) => p.x1));
+        const by = median(inliers.map((p) => p.y1));
+        const angles = [], scales = [];
+        for (const p of inliers) {
+          const ux = p.x0 - ax, uy = p.y0 - ay;
+          const vx = p.x1 - bx, vy = p.y1 - by;
+          const r0 = Math.hypot(ux, uy), r1 = Math.hypot(vx, vy);
+          if (r0 < 7 || r1 < 5) continue;
+          angles.push(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy));
+          scales.push(Math.log(clamp(r1 / r0, 0.96, 1.04)));
+        }
+        const roll = angles.length ? deg(median(angles)) : 0;
+        const logScale = scales.length ? median(scales) : 0;
+        const inlierRatio = inliers.length / Math.max(1, tracked.length);
+        const countScore = clamp(inliers.length / CAMERA_TARGET_TRACKS, 0, 1);
+        const medianError = median(inliers.map((p) => p.e));
+        const errorScore = clamp(1 - medianError / 45, 0.25, 1);
+        const confidence = clamp(inlierRatio * countScore * errorScore, 0, 1);
+        return {
+          dx: clamp(median(inliers.map((p) => p.dx)), -CAMERA_MAX_STEP_X, CAMERA_MAX_STEP_X),
+          dy: clamp(median(inliers.map((p) => p.dy)), -CAMERA_MAX_STEP_Y, CAMERA_MAX_STEP_Y),
+          roll: clamp(roll, -CAMERA_MAX_STEP_ROLL, CAMERA_MAX_STEP_ROLL),
+          logScale: clamp(logScale, -CAMERA_MAX_STEP_LOG_SCALE, CAMERA_MAX_STEP_LOG_SCALE),
+          confidence,
+          tracks: inliers.length,
+          source: 'cv'
+        };
+      } catch (error) {
+        console.warn('OpenCV tracking fallback', error);
+        return { dx: 0, dy: 0, roll: 0, logScale: 0, confidence: 0, tracks: 0, source: 'fallback' };
+      } finally {
+        [a, b, p0, p1, st, err, mask].forEach((m) => { try { m?.delete?.(); } catch {} });
+      }
+    })();
+    cvPairCache.set(i, promise);
+    return promise;
+  }
+
+  async function motionPair(i) {
+    if (motionPairCache.has(i)) return motionPairCache.get(i);
+    const promise = (async () => {
+      const cvPair = await cvFeaturePair(i);
+      if (cvPair.confidence >= CAMERA_CV_MIN_CONFIDENCE) return cvPair;
+      const far = await farPair(i);
       return {
-        x: clamp(prev.x + clamp(targetX - prev.x, -FAR_LOCK_STEP_X, FAR_LOCK_STEP_X), -FAR_LOCK_MAX_X, FAR_LOCK_MAX_X),
-        y: clamp(prev.y + clamp(targetY - prev.y, -FAR_LOCK_STEP_Y, FAR_LOCK_STEP_Y), -FAR_LOCK_MAX_Y, FAR_LOCK_MAX_Y),
+        dx: clamp(far.dx, -CAMERA_MAX_STEP_X, CAMERA_MAX_STEP_X),
+        dy: clamp(far.dy, -CAMERA_MAX_STEP_Y, CAMERA_MAX_STEP_Y),
+        roll: 0,
+        logScale: 0,
+        confidence: clamp(far.confidence * 0.55, 0, 0.35),
+        tracks: cvPair.tracks || 0,
+        source: 'far'
+      };
+    })();
+    motionPairCache.set(i, promise);
+    return promise;
+  }
+
+  function rawTrajectory(i) {
+    if (rawTrajectoryCache.has(i)) return rawTrajectoryCache.get(i);
+    const promise = (async () => {
+      if (i <= 0) return { x: 0, y: 0, roll: 0, logScale: 0, confidence: 1 };
+      const [prev, pair] = await Promise.all([rawTrajectory(i - 1), motionPair(i - 1)]);
+      return {
+        x: prev.x + pair.dx,
+        y: prev.y + pair.dy,
+        roll: prev.roll + pair.roll,
+        logScale: prev.logScale + pair.logScale,
         confidence: pair.confidence
       };
     })();
-    farLockCache.set(i, promise);
+    rawTrajectoryCache.set(i, promise);
+    return promise;
+  }
+
+  function cameraPose(i) {
+    if (cameraPoseCache.has(i)) return cameraPoseCache.get(i);
+    const promise = (async () => {
+      const start = Math.max(0, i - CAMERA_WINDOW_RADIUS);
+      const end = Math.min(route.length - 1, i + CAMERA_WINDOW_RADIUS);
+      const indices = [];
+      for (let k = start; k <= end; k += 1) indices.push(k);
+      const rawList = await Promise.all(indices.map(rawTrajectory));
+      const raw = await rawTrajectory(i);
+      let sx = 0, sy = 0, sr = 0, ss = 0, sw = 0;
+      for (let n = 0; n < rawList.length; n += 1) {
+        const d = Math.abs(indices[n] - i);
+        const w = d === 0 ? 3 : d === 1 ? 2 : 1;
+        sx += rawList[n].x * w; sy += rawList[n].y * w; sr += rawList[n].roll * w; ss += rawList[n].logScale * w; sw += w;
+      }
+      const smooth = { x: sx / sw, y: sy / sw, roll: sr / sw, logScale: ss / sw };
+      const localPairs = [];
+      for (let k = Math.max(0, i - 2); k < Math.min(route.length - 1, i + 2); k += 1) localPairs.push(motionPair(k));
+      const pairs = await Promise.all(localPairs);
+      const confidence = pairs.length ? pairs.reduce((s, p) => s + p.confidence, 0) / pairs.length : 0;
+      const pose = {
+        x: clamp(smooth.x - raw.x, -CAMERA_MAX_CORR_X, CAMERA_MAX_CORR_X),
+        y: clamp(smooth.y - raw.y, -CAMERA_MAX_CORR_Y, CAMERA_MAX_CORR_Y),
+        roll: clamp(smooth.roll - raw.roll, -CAMERA_MAX_CORR_ROLL, CAMERA_MAX_CORR_ROLL),
+        scale: clamp(Math.exp(smooth.logScale - raw.logScale), CAMERA_MIN_SCALE, CAMERA_MAX_SCALE),
+        confidence,
+        source: cvReady && confidence >= CAMERA_CV_MIN_CONFIDENCE ? 'cv' : 'mixed'
+      };
+      const diag = window.__journeyDiagnostics;
+      diag.lastPose = { ...pose, frame: i };
+      diag.cameraSamples += 1;
+      diag.averageConfidence += (confidence - diag.averageConfidence) / diag.cameraSamples;
+      return pose;
+    })();
+    cameraPoseCache.set(i, promise);
     return promise;
   }
 
@@ -464,12 +682,12 @@
     const promise = (async () => {
       const img = await loadCors(route[i].url);
       if (!img) return null;
-      const [roll, lock] = await Promise.all([smoothRoll(i), farLock(i)]);
+      const [roll, pose] = await Promise.all([smoothRoll(i), cameraPose(i)]);
       const canvas = document.createElement('canvas');
       canvas.width = ANALYSIS_W; canvas.height = ANALYSIS_H;
       const g = canvas.getContext('2d', { willReadFrequently: true });
       g.fillStyle = '#111'; g.fillRect(0, 0, ANALYSIS_W, ANALYSIS_H);
-      drawBase(g, img, i, roll, lock);
+      drawBase(g, img, i, roll, pose);
       try {
         const data = g.getImageData(0, 0, ANALYSIS_W, ANALYSIS_H).data;
         const gray = new Float32Array(ANALYSIS_W * ANALYSIS_H);
@@ -580,13 +798,13 @@
 
   async function createStabilizedFrame(image, i) {
     const { w, h } = canvasSize();
-    const [roll, lock] = await Promise.all([smoothRoll(i), farLock(i)]);
+    const [roll, pose] = await Promise.all([smoothRoll(i), cameraPose(i)]);
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     const g = canvas.getContext('2d', { alpha: false });
     g.fillStyle = '#05070a'; g.fillRect(0, 0, w, h);
-    drawBase(g, image, i, roll, lock);
-    return { canvas, roll, lock };
+    drawBase(g, image, i, roll, pose);
+    return { canvas, roll: roll + pose.roll, pose };
   }
 
   function blendAsset(col, row) {
@@ -717,19 +935,20 @@
     const end = Math.min(route.length, i + PRELOAD_AHEAD + 1);
     for (let k = i + 1; k < end; k += 1) loadRender(route[k].url).catch(() => {});
     for (let k = i; k < Math.min(route.length, i + 8); k += 1) smoothRoll(k).catch(() => {});
-    for (let k = i; k < Math.min(route.length, i + 6); k += 1) farLock(k).catch(() => {});
+    for (let k = i; k < Math.min(route.length, i + 7); k += 1) cameraPose(k).catch(() => {});
     for (let k = i; k < Math.min(route.length - 1, i + 4); k += 1) tileVectors(k).catch(() => {});
   }
 
-  function updateHud(i, rollValue = 0, lock = null) {
+  function updateHud(i, rollValue = 0, pose = null) {
     const frame = route[i];
     ui.num.textContent = `${i + 1} / ${route.length}`;
     ui.bar.style.width = `${(i + 1) / route.length * 100}%`;
     const direction = travelBearing(i);
     ui.heading.textContent = Number.isFinite(direction) ? `${Math.round(direction)}°` : '—°';
     ui.coord.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-    const confidence = lock && Number.isFinite(lock.confidence) ? `・Lock ${Math.round(lock.confidence * 100)}%` : '';
-    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Far Lock${confidence}・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
+    const conf = pose && Number.isFinite(pose.confidence) ? Math.round(pose.confidence * 100) : 0;
+    const source = pose?.source === 'cv' ? 'CV' : 'Mix';
+    ui.net.textContent = `${(speedMs / 1000).toFixed(2)}秒・${source} ${conf}%・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
   }
 
   async function showFirst() {
@@ -742,10 +961,11 @@
     ui.edgeBlur?.classList.add('drive-stabilized');
     resetPerceptualBridgeVisual();
     currentImage = image;
-    updateHud(0, first.roll, first.lock);
+    updateHud(0, first.roll, first.pose);
   }
 
   async function animatePair(i) {
+    const pairStarted = performance.now();
     const nextImage = await loadRender(route[i + 1].url);
     const [aInfo, bInfo, vectors] = await Promise.all([
       createStabilizedFrame(currentImage, i),
@@ -768,7 +988,7 @@
           try {
             normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, t, bridgeStrength);
           } catch (error) {
-            console.warn('Far-field flow fallback', error);
+            console.warn('Phase 1 flow fallback', error);
             ctx.globalAlpha = 1; ctx.drawImage(frameA, 0, 0);
             ctx.globalAlpha = t; ctx.drawImage(frameB, 0, 0);
             ctx.globalAlpha = 1;
@@ -786,17 +1006,27 @@
     resetPerceptualBridgeVisual();
     ctx.globalAlpha = 1; ctx.drawImage(frameB, 0, 0);
     currentImage = nextImage;
-    updateHud(i + 1, bInfo.roll, bInfo.lock);
+    const elapsed = performance.now() - pairStarted;
+    const diag = window.__journeyDiagnostics;
+    diag.lastPairMs = elapsed;
+    diag.pairSamples += 1;
+    diag.averagePairMs += (elapsed - diag.averagePairMs) / diag.pairSamples;
+    updateHud(i + 1, bInfo.roll, bInfo.pose);
   }
 
   async function play(frames) {
     const playToken = ++token;
     route = frames;
-    renderCache.clear(); corsCache.clear(); grayCache.clear(); farEdgeCache.clear(); rollRawCache.clear(); rollSmoothCache.clear(); correctedGrayCache.clear(); farPairCache.clear(); farLockCache.clear(); stabilizedGrayCache.clear(); tileCache.clear(); blendAssetCache.clear();
+    [renderCache, corsCache, grayCache, rollRawCache, rollSmoothCache, correctedGrayCache, farPairCache, cvPairCache, motionPairCache, rawTrajectoryCache, cameraPoseCache, stabilizedGrayCache, tileCache, blendAssetCache].forEach((cache) => cache.clear());
+    window.__journeyDiagnostics.cameraSamples = 0;
+    window.__journeyDiagnostics.averageConfidence = 0;
+    window.__journeyDiagnostics.pairSamples = 0;
+    window.__journeyDiagnostics.averagePairMs = 0;
     if (!route.length) throw new Error('再生できる画像がありません');
     ui.place.textContent = route[0].sequenceId ? `Sequence #${route[0].sequenceId}` : 'KartaView route';
+    await Promise.race([ensureOpenCV(), sleep(6000)]);
     await warmAhead(0);
-    await Promise.race([Promise.all([smoothRoll(0), smoothRoll(1), farLock(1), tileVectors(0)]), sleep(750)]);
+    await Promise.race([Promise.all([smoothRoll(0), smoothRoll(1), cameraPose(0), cameraPose(1), tileVectors(0)]), sleep(1100)]);
     await showFirst();
     let nextAt = performance.now() + speedMs;
     for (let i = 0; i < route.length - 1 && playToken === token; i += 1) {
@@ -809,7 +1039,7 @@
       if (nextAt < performance.now()) nextAt = performance.now() + Math.max(8, speedMs * .10);
     }
     if (playToken === token) {
-      ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・再スタート`;
+      ui.net.textContent = `${(speedMs / 1000).toFixed(2)}秒・再スタート`;
       await sleep(500);
       if (playToken === token) play(frames);
     }
@@ -836,9 +1066,9 @@
   }
   async function start() {
     ui.startBtn.disabled = true;
-    ui.startBtn.textContent = 'ルートを準備中…';
+    ui.startBtn.textContent = 'カメラ軌道を解析中…';
     ui.error.hidden = true;
-    speedMs = Number(document.querySelector('input[name="driveSpeed"]:checked')?.value || 100);
+    speedMs = Number(document.querySelector('input[name="driveSpeed"]:checked')?.value || 80);
     try {
       await requestWakeLock();
       const data = await fetchRoute();
@@ -871,7 +1101,7 @@
     if (document.visibilityState === 'visible' && (!wake || wake.released)) requestWakeLock();
   });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.13').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.14').catch(() => {}));
   }
   console.info(`Streetview Journey v${VERSION}`);
 })();
