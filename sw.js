@@ -1,7 +1,7 @@
-/* Streetview Journey v0.1.21.1 */
-const SHELL_CACHE='streetview-shell-v0.1.21.1';
+/* Streetview Journey v0.1.22 */
+const SHELL_CACHE='streetview-shell-v0.1.22';
 const IMAGE_CACHE='streetview-images-v0.1.0';
-const SHELL=['/','/index.html','/styles.css?v=0.1.6','/app.js?v=0.1.21','/diagnostics.js?v=0.1.21','/motion-worker.js?v=0.1.21','/manifest.webmanifest'];
+const SHELL=['/','/index.html','/styles.css?v=0.1.6','/app.js?v=0.1.22','/diagnostics.js?v=0.1.22','/motion-worker.js?v=0.1.22','/manifest.webmanifest'];
 const IMAGE_LIMIT=80;
 self.addEventListener('install',event=>{event.waitUntil(caches.open(SHELL_CACHE).then(cache=>cache.addAll(SHELL)));self.skipWaiting();});
 self.addEventListener('activate',event=>{event.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>![SHELL_CACHE,IMAGE_CACHE].includes(k)).map(k=>caches.delete(k)));await self.clients.claim();})());});
