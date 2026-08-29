@@ -1,5 +1,5 @@
-/* Streetview Journey v0.1.29 */
-const SHELL_CACHE='streetview-shell-v0.1.29';
+/* Streetview Journey v0.1.29 Phase 1.6.1 cache refresh */
+const SHELL_CACHE='streetview-shell-v0.1.29-p161';
 const IMAGE_CACHE='streetview-images-v0.1.0';
 const SHELL=['/','/index.html','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.29','/travel-axis-worker.js?v=0.1.29','/app.js?v=0.1.29','/diagnostics.js?v=0.1.29','/motion-worker.js?v=0.1.25','/manifest.webmanifest'];
 const IMAGE_LIMIT=80;

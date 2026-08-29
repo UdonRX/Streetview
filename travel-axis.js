@@ -1,4 +1,4 @@
-/* Streetview Journey v0.1.29 Visual Heading Calibration */
+/* Streetview Journey v0.1.29 Phase 1.6.1 Visual Preflight Gate */
 (()=>{
   'use strict';
   const VERSION='0.1.29';
@@ -10,6 +10,11 @@
   const ANCHOR_WINDOW_RADIUS=2;
   const FULL_SAMPLE_COUNT=8;
   const BOOTSTRAP_WAIT_MS=720;
+  const PREFLIGHT_MIN_ANALYSES=3;
+  const PREFLIGHT_TARGET_ANALYSES=5;
+  const PREFLIGHT_POOL_SIZE=11;
+  const PREFLIGHT_IMAGE_TIMEOUT_MS=2800;
+  const PREFLIGHT_RESULT_TIMEOUT_MS=2200;
   const NativeWorker=window.Worker;
   const NativePost=NativeWorker?.prototype?.postMessage;
   const nativeSetTimeout=window.setTimeout.bind(window);
@@ -87,51 +92,58 @@
   }
 
   const state=window.__journeyTravelAxis={
-    version:VERSION,mode:'visual heading calibration + full-image FOE + metadata fallback',worker:'starting',workerReady:false,
+    version:VERSION,mode:'phase1.6.1 visual preflight gate + visual heading calibration + metadata fallback',worker:'starting',workerReady:false,
+    preflightPolicy:{minAnalyses:PREFLIGHT_MIN_ANALYSES,targetAnalyses:PREFLIGHT_TARGET_ANALYSES,poolSize:PREFLIGHT_POOL_SIZE},
     generation:0,routeFrames:0,routeSelection:null,latest:null,latestFull:null,appliedFrame:null,appliedShift:0,visualShift:0,poseCompensation:0,metadataAnchor:50,effectiveAnchor:50,anchorSource:'metadata-only',appliedConfidence:0,outsideFov:false,errors:0,
     anchorForFrame(frame,fallback){if(!Number.isFinite(frame)||frame<0||frame>=routeFrames.length)return Number.isFinite(fallback)?fallback:50;const e=effectiveAnchor(frame);return e.anchor*100;},
     waitForBootstrap(timeout=BOOTSTRAP_WAIT_MS){return Promise.race([bootstrapPromise,new Promise(r=>nativeSetTimeout(r,timeout))]);},
-    snapshot(){const vals=[...axisByFrame.values()].filter(v=>Number.isFinite(v?.confidence)),good=vals.filter(v=>v.confidence>=MIN_AXIS_CONF),fullVals=[...fullAxisByFrame.values()].filter(v=>Number.isFinite(v?.confidence)),fullGood=fullVals.filter(v=>v.confidence>=FULL_MIN_CONF),cal=computeCalibration();return{version:VERSION,mode:this.mode,worker:this.worker,workerReady:this.workerReady,generation,routeFrames:routeFrames.length,routeSelection,results:vals.length,usable:good.length,averageConfidence:good.length?good.reduce((s,v)=>s+v.confidence,0)/good.length:0,fullResults:fullVals.length,fullUsable:fullGood.length,fullAverageConfidence:fullGood.length?fullGood.reduce((s,v)=>s+v.confidence,0)/fullGood.length:0,calibrationBias:cal.bias,calibrationConfidence:cal.confidence,calibrationSpread:cal.spread,calibrationSamples:cal.samples,fullCalibrationSamples:cal.fullSamples,cropCalibrationSamples:cal.cropSamples,cameraYawBiasDeg:cal.cameraYawBiasDeg,calibrationSource:cal.source,outsideObservationRate:cal.outsideRate,latest:lastAxis,latestFull:lastFullAxis,appliedFrame:this.appliedFrame,appliedShift:this.appliedShift,visualShift:this.visualShift,poseCompensation:this.poseCompensation,metadataAnchor:this.metadataAnchor,effectiveAnchor:this.effectiveAnchor,anchorSource:this.anchorSource,appliedConfidence:this.appliedConfidence,outsideFov:this.outsideFov,errors:axisErrors};}
+    snapshot(){const vals=[...axisByFrame.values()].filter(v=>Number.isFinite(v?.confidence)),good=vals.filter(v=>v.confidence>=MIN_AXIS_CONF),fullVals=[...fullAxisByFrame.values()].filter(v=>Number.isFinite(v?.confidence)),fullGood=fullVals.filter(v=>v.confidence>=FULL_MIN_CONF),cal=computeCalibration();return{version:VERSION,mode:this.mode,preflightPolicy:this.preflightPolicy,worker:this.worker,workerReady:this.workerReady,generation,routeFrames:routeFrames.length,routeSelection,results:vals.length,usable:good.length,averageConfidence:good.length?good.reduce((s,v)=>s+v.confidence,0)/good.length:0,fullResults:fullVals.length,fullUsable:fullGood.length,fullAverageConfidence:fullGood.length?fullGood.reduce((s,v)=>s+v.confidence,0)/fullGood.length:0,calibrationBias:cal.bias,calibrationConfidence:cal.confidence,calibrationSpread:cal.spread,calibrationSamples:cal.samples,fullCalibrationSamples:cal.fullSamples,cropCalibrationSamples:cal.cropSamples,cameraYawBiasDeg:cal.cameraYawBiasDeg,calibrationSource:cal.source,outsideObservationRate:cal.outsideRate,latest:lastAxis,latestFull:lastFullAxis,appliedFrame:this.appliedFrame,appliedShift:this.appliedShift,visualShift:this.visualShift,poseCompensation:this.poseCompensation,metadataAnchor:this.metadataAnchor,effectiveAnchor:this.effectiveAnchor,anchorSource:this.anchorSource,appliedConfidence:this.appliedConfidence,outsideFov:this.outsideFov,errors:axisErrors};}
   };
 
   try{Object.defineProperty(window,'__journeyDiagnostics',{configurable:true,get(){return diagValue;},set(v){diagValue=v;if(v&&typeof v==='object'){v.version=VERSION;v.travelAxis='visual-heading-calibration';v.travelAxisState=state;}}});}catch{}
   window.setTimeout=function(fn,ms,...args){const adjusted=Number(ms)===85?MOTION_WAIT_COMPAT_MS:ms;return nativeSetTimeout(fn,adjusted,...args);};
 
-  function loadBootstrapImage(url){const key=normalizeURL(url);if(bootstrapImages.has(key))return bootstrapImages.get(key);const p=new Promise((resolve,reject)=>{const im=new Image();im.crossOrigin='anonymous';im.referrerPolicy='no-referrer';im.decoding='async';im.onload=()=>resolve(im);im.onerror=()=>reject(new Error('axis image load failed'));im.src=`${key}${key.includes('?')?'&':'?'}axisv=${VERSION}`;});bootstrapImages.set(key,p);return p;}
+  function loadBootstrapImage(url){const key=normalizeURL(url);if(bootstrapImages.has(key))return bootstrapImages.get(key);let p;p=new Promise((resolve,reject)=>{const im=new Image();im.crossOrigin='anonymous';im.referrerPolicy='no-referrer';im.decoding='async';im.onload=()=>resolve(im);im.onerror=()=>{bootstrapImages.delete(key);reject(new Error('axis image load failed'));};im.src=`${key}${key.includes('?')?'&':'?'}axisv=${VERSION}`;});bootstrapImages.set(key,p);return p;}
   function grayPair(imA,imB){const ratioA=imA.naturalWidth/Math.max(1,imA.naturalHeight),ratioB=imB.naturalWidth/Math.max(1,imB.naturalHeight),ratio=(ratioA+ratioB)/2,w=160,h=clamp(Math.round(w/Math.max(.65,ratio)),72,128);const make=im=>{const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(im,0,0,w,h);const d=g.getImageData(0,0,w,h).data,o=new Uint8Array(w*h);for(let k=0,j=0;k<o.length;k++,j+=4)o[k]=Math.round(d[j]*.299+d[j+1]*.587+d[j+2]*.114);return o;};return{w,h,a:make(imA),b:make(imB)};}
   async function submitFullAxis(frame,gen){
     if(gen!==generation||!axisWorker||frame<0||frame>=routeFrames.length-1)return false;
     try{const[imA,imB]=await Promise.all([loadBootstrapImage(routeFrames[frame].url),loadBootstrapImage(routeFrames[frame+1].url)]);if(gen!==generation)return false;const g=grayPair(imA,imB),a=g.a.buffer,b=g.b.buffer;NativePost.call(axisWorker,{type:'axis',space:'full-image',frame,generation:gen,width:g.w,height:g.h,grayA:a,grayB:b,seed:frame*173+g.w*g.h},[a,b]);return true;}catch{return false;}
   }
 
-  function submitPreflightPair(frames,frame){
-    return new Promise(async resolve=>{
-      if(!axisWorker||!Array.isArray(frames)||frame<0||frame>=frames.length-1){resolve(null);return;}
-      const requestId=`pf-${++preflightSeq}`;let timer=null;
-      preflightPending.set(requestId,{resolve:r=>{if(timer)clearTimeout(timer);preflightPending.delete(requestId);resolve(r);}});
-      timer=nativeSetTimeout(()=>{const p=preflightPending.get(requestId);if(p){preflightPending.delete(requestId);resolve(null);}},320);
-      try{
-        const[imA,imB]=await Promise.all([loadBootstrapImage(frames[frame].url),loadBootstrapImage(frames[frame+1].url)]),g=grayPair(imA,imB),a=g.a.buffer,b=g.b.buffer;
-        NativePost.call(axisWorker,{type:'axis',space:'preflight',requestId,frame,generation:-1,width:g.w,height:g.h,grayA:a,grayB:b,seed:frame*211+g.w*g.h},[a,b]);
-      }catch{const p=preflightPending.get(requestId);if(p){preflightPending.delete(requestId);if(timer)clearTimeout(timer);resolve(null);}}
+  async function submitPreflightPair(frames,frame){
+    if(!axisWorker||!Array.isArray(frames)||frame<0||frame>=frames.length-1)return null;
+    let loaded=null;
+    try{loaded=await Promise.race([Promise.all([loadBootstrapImage(frames[frame].url),loadBootstrapImage(frames[frame+1].url)]),new Promise(r=>nativeSetTimeout(()=>r(null),PREFLIGHT_IMAGE_TIMEOUT_MS))]);}catch{return null;}
+    if(!loaded)return null;
+    let g;try{g=grayPair(loaded[0],loaded[1]);}catch{return null;}
+    return new Promise(resolve=>{
+      const requestId=`pf-${++preflightSeq}`;let timer=null,settled=false;
+      const done=r=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);preflightPending.delete(requestId);resolve(r||null);};
+      preflightPending.set(requestId,{resolve:done});
+      try{const a=g.a.buffer,b=g.b.buffer;NativePost.call(axisWorker,{type:'axis',space:'preflight',requestId,frame,generation:-1,width:g.w,height:g.h,grayA:a,grayB:b,seed:frame*211+g.w*g.h},[a,b]);timer=nativeSetTimeout(()=>done(null),PREFLIGHT_RESULT_TIMEOUT_MS);}catch{done(null);}
     });
   }
+  function preflightIndices(frames){const pairs=Math.max(0,(Array.isArray(frames)?frames.length:0)-1);if(!pairs)return[];const count=Math.min(PREFLIGHT_POOL_SIZE,pairs);if(count===1)return[0];const last=pairs-1,out=[];for(let k=0;k<count;k++)out.push(Math.round(last*k/(count-1)));return[...new Set(out)];}
+  function completedPreflight(r){return!!(r&&Number.isFinite(r.centerX)&&Number.isFinite(r.confidence)&&!['invalid','size','safe-error'].includes(String(r.kind||'')));}
   async function preflightCandidate(candidate){
-    const frames=Array.isArray(candidate?.frames)?candidate.frames:[];if(frames.length<2)return{sequenceId:candidate?.sequenceId||null,visualScore:0,confidence:0,outsideRate:1,samples:0};
-    const n=frames.length-1,inds=[...new Set([0,Math.round(n*.5),Math.max(0,n-1)])],results=await Promise.all(inds.map(i=>submitPreflightPair(frames,i))),good=results.filter(r=>r&&Number.isFinite(r.centerX)&&Number.isFinite(r.confidence)&&r.confidence>=.16);
-    if(!good.length)return{sequenceId:candidate.sequenceId,visualScore:.12,confidence:0,outsideRate:1,samples:0};
+    const frames=Array.isArray(candidate?.frames)?candidate.frames:[],pool=preflightIndices(frames);if(pool.length<PREFLIGHT_MIN_ANALYSES)return{sequenceId:candidate?.sequenceId||null,visualScore:0,confidence:0,outsideRate:1,samples:0,analysisSamples:0,usableSamples:0,attemptedPairs:0,established:false,required:PREFLIGHT_MIN_ANALYSES};
+    const primary=pool.slice(0,Math.min(PREFLIGHT_TARGET_ANALYSES,pool.length)),initial=await Promise.all(primary.map(i=>submitPreflightPair(frames,i))),completed=initial.filter(completedPreflight);let attempted=primary.length,cursor=primary.length;
+    while(completed.length<PREFLIGHT_MIN_ANALYSES&&cursor<pool.length){const batch=pool.slice(cursor,cursor+2);cursor+=batch.length;attempted+=batch.length;const retry=await Promise.all(batch.map(i=>submitPreflightPair(frames,i)));for(const r of retry)if(completedPreflight(r))completed.push(r);}
+    const analyses=completed.slice(0,PREFLIGHT_TARGET_ANALYSES),established=analyses.length>=PREFLIGHT_MIN_ANALYSES,good=analyses.filter(r=>r.confidence>=MIN_AXIS_CONF);
+    if(!established)return{sequenceId:candidate.sequenceId,visualScore:0,confidence:0,outsideRate:1,samples:analyses.length,analysisSamples:analyses.length,usableSamples:good.length,attemptedPairs:attempted,established:false,required:PREFLIGHT_MIN_ANALYSES};
+    if(!good.length)return{sequenceId:candidate.sequenceId,visualScore:.12,confidence:0,outsideRate:0,samples:analyses.length,analysisSamples:analyses.length,usableSamples:0,attemptedPairs:attempted,established:true,required:PREFLIGHT_MIN_ANALYSES,score:.0864};
     let sw=0,sv=0,sc=0,out=0;for(const r of good){const outside=r.centerX<0||r.centerX>1;if(outside)out++;const margin=outside?0:clamp(1-Math.abs(r.centerX-.5)/.52,0,1),kindGain=String(r.kind||'').startsWith('side-flow')?.58:1,w=Math.max(.04,r.confidence)*(.55+.45*clamp(r.coverage||.35,0,1))*kindGain;sv+=margin*w;sc+=r.confidence*w;sw+=w;}
-    const visualScore=sw?sv/sw:0,confidence=sw?sc/sw:0,outsideRate=out/good.length;return{sequenceId:candidate.sequenceId,visualScore,confidence,outsideRate,samples:good.length,score:clamp(visualScore*.72+confidence*.28,0,1)};
+    const visualScore=sw?sv/sw:0,confidence=sw?sc/sw:0,outsideRate=out/good.length;return{sequenceId:candidate.sequenceId,visualScore,confidence,outsideRate,samples:analyses.length,analysisSamples:analyses.length,usableSamples:good.length,attemptedPairs:attempted,established:true,required:PREFLIGHT_MIN_ANALYSES,score:clamp(visualScore*.72+confidence*.28,0,1)};
   }
   async function chooseVisualCandidate(data){
-    const candidates=Array.isArray(data?.candidateRoutes)?data.candidateRoutes.filter(c=>Array.isArray(c?.frames)&&c.frames.length>=2).slice(0,3):[];if(candidates.length<2)return null;
+    let candidates=Array.isArray(data?.candidateRoutes)?data.candidateRoutes.filter(c=>Array.isArray(c?.frames)&&c.frames.length>=2).slice(0,3):[];
+    if(!candidates.length&&Array.isArray(data?.frames)&&data.frames.length>=2)candidates=[{sequenceId:data.sequenceId,anchorIndex:data.anchorIndex,direction:data.selection?.direction||'forward',score:Number.isFinite(data.selection?.score)?data.selection.score:1,alignmentErrorDeg:data.selection?.alignmentErrorDeg,proximityMeters:data.selection?.proximityMeters,frames:data.frames}];
+    if(!candidates.length)return{candidate:null,evaluations:[],ready:false,reason:'no-candidate'};
     bootstrapImages.clear();
-    const first=await preflightCandidate(candidates[0]);
-    const evaluations=[{candidate:candidates[0],preflight:first}];
-    if(first.samples>=2&&first.score>=.60&&first.outsideRate<=.34)return{candidate:candidates[0],evaluations};
-    const rest=await Promise.all(candidates.slice(1).map(async c=>({candidate:c,preflight:await preflightCandidate(c)})));evaluations.push(...rest);
+    const evaluations=await Promise.all(candidates.map(async candidate=>({candidate,preflight:await preflightCandidate(candidate)})));
+    if(evaluations.some(e=>!e.preflight.established))return{candidate:null,evaluations,ready:false,reason:'insufficient-real-image-analyses'};
     let best=evaluations[0],bestScore=-1;for(const e of evaluations){const meta=clamp(Number(e.candidate.score)||0,0,1),pf=e.preflight,combined=pf.score*.68+meta*.32-(pf.outsideRate||0)*.18;if(combined>bestScore){bestScore=combined;best=e;}}
-    return{candidate:best.candidate,evaluations,bestScore};
+    return{candidate:best.candidate,evaluations,bestScore,ready:true};
   }
 
   function bootstrapIndices(){const n=routeFrames.length-1;if(n<=0)return[];const raw=[0,1,2,Math.round(n*.20),Math.round(n*.40),Math.round(n*.60),Math.round(n*.80),n-1];return[...new Set(raw.map(v=>clamp(v,0,n-1)))].slice(0,FULL_SAMPLE_COUNT);}
@@ -152,7 +164,7 @@
     return beginBootstrap(generation);
   }
 
-  if(window.Response?.prototype?.json){const nativeJson=Response.prototype.json;Response.prototype.json=async function(...args){const data=await nativeJson.apply(this,args);try{if(String(this.url||'').includes('/api/imagery')&&Array.isArray(data?.frames)){const picked=await Promise.race([chooseVisualCandidate(data),new Promise(r=>nativeSetTimeout(()=>r(null),900))]);if(picked?.candidate){const original=data.sequenceId,best=picked.candidate;data.sequenceId=best.sequenceId;data.anchorIndex=best.anchorIndex;data.frames=best.frames;const visualPreflight=picked.evaluations.map(e=>({sequenceId:e.candidate.sequenceId,metadataScore:e.candidate.score,visualScore:e.preflight.visualScore,confidence:e.preflight.confidence,outsideRate:e.preflight.outsideRate,samples:e.preflight.samples}));data.selection={...(data.selection||{}),strategy:'direction+visual',metadataChosenSequenceId:original,visualOverride:String(original)!==String(best.sequenceId),direction:best.direction||data.selection?.direction,alignmentErrorDeg:Number.isFinite(best.alignmentErrorDeg)?best.alignmentErrorDeg:data.selection?.alignmentErrorDeg,score:Number.isFinite(best.score)?best.score:data.selection?.score,proximityMeters:Number.isFinite(best.proximityMeters)?best.proximityMeters:data.selection?.proximityMeters,visualPreflight};}const ready=resetRoute(data.frames,data.selection||null);await Promise.race([ready,new Promise(r=>nativeSetTimeout(r,BOOTSTRAP_WAIT_MS))]);}}catch{}return data;};}
+  if(window.Response?.prototype?.json){const nativeJson=Response.prototype.json;Response.prototype.json=async function(...args){const data=await nativeJson.apply(this,args),isImagery=String(this.url||'').includes('/api/imagery');try{if(isImagery&&Array.isArray(data?.frames)){const picked=await chooseVisualCandidate(data),visualPreflight=(picked?.evaluations||[]).map(e=>({sequenceId:e.candidate.sequenceId,metadataScore:e.candidate.score,visualScore:e.preflight.visualScore,confidence:e.preflight.confidence,outsideRate:e.preflight.outsideRate,samples:e.preflight.samples,analysisSamples:e.preflight.analysisSamples,usableSamples:e.preflight.usableSamples,attemptedPairs:e.preflight.attemptedPairs,established:e.preflight.established,required:e.preflight.required}));if(!picked?.ready||!picked?.candidate){data.selection={...(data.selection||{}),strategy:'visual-preflight-required',visualPreflightReady:false,visualPreflightPolicy:{minAnalyses:PREFLIGHT_MIN_ANALYSES,targetAnalyses:PREFLIGHT_TARGET_ANALYSES},visualPreflight};data.preflightError={code:'VISUAL_PREFLIGHT_INCOMPLETE',message:'候補sequenceの実画像解析が3ペア以上成立しなかったため開始を停止しました',reason:picked?.reason||'unknown'};data.frames=[];return data;}const original=data.sequenceId,best=picked.candidate;data.sequenceId=best.sequenceId;data.anchorIndex=best.anchorIndex;data.frames=best.frames;data.selection={...(data.selection||{}),strategy:'direction+visual',visualPreflightReady:true,visualPreflightPolicy:{minAnalyses:PREFLIGHT_MIN_ANALYSES,targetAnalyses:PREFLIGHT_TARGET_ANALYSES},metadataChosenSequenceId:original,visualOverride:String(original)!==String(best.sequenceId),direction:best.direction||data.selection?.direction,alignmentErrorDeg:Number.isFinite(best.alignmentErrorDeg)?best.alignmentErrorDeg:data.selection?.alignmentErrorDeg,score:Number.isFinite(best.score)?best.score:data.selection?.score,proximityMeters:Number.isFinite(best.proximityMeters)?best.proximityMeters:data.selection?.proximityMeters,visualPreflight};const ready=resetRoute(data.frames,data.selection||null);await Promise.race([ready,new Promise(r=>nativeSetTimeout(r,BOOTSTRAP_WAIT_MS))]);}}catch(error){if(isImagery&&Array.isArray(data?.frames)){data.selection={...(data.selection||{}),strategy:'visual-preflight-required',visualPreflightReady:false,visualPreflightPolicy:{minAnalyses:PREFLIGHT_MIN_ANALYSES,targetAnalyses:PREFLIGHT_TARGET_ANALYSES},visualPreflight:[]};data.preflightError={code:'VISUAL_PREFLIGHT_EXCEPTION',message:'Visual Preflightの実画像解析を完了できなかったため開始を停止しました',detail:String(error?.message||error)};data.frames=[];}}return data;};}
 
   function inferFrame(message){if(Number.isFinite(message?.frameIndex))return message.frameIndex;const w=Number(message?.width)||0,h=Number(message?.height)||0,seed=Number(message?.seed);if(Number.isFinite(seed)&&w&&h){const v=(seed-w*h)/31;if(Number.isFinite(v)&&Math.abs(v-Math.round(v))<.08)return Math.round(v);}return null;}
 
@@ -189,7 +201,7 @@
   };
 
   function updateDiagnosticLine(){
-    const box=document.getElementById('journeyDiag');if(!box)return;const head=box.querySelector('.jd-head b');if(head)head.textContent='PHASE 1.6 DIAG';let line=document.getElementById('jdAxis');if(!line){line=document.createElement('div');line.id='jdAxis';const ref=document.getElementById('jdApplied')||document.getElementById('jdLine4');ref?.insertAdjacentElement('afterend',line);}const snap=state.snapshot(),dir=snap.appliedShift<-.008?'→':snap.appliedShift>.008?'←':'•',sel=snap.routeSelection,selText=String(sel?.strategy||'').startsWith('direction')?`${sel.direction==='reverse'?'REV':'FWD'} ${Number.isFinite(sel.alignmentErrorDeg)?Math.round(sel.alignmentErrorDeg)+'°':'—'}`:'FIX',calText=snap.calibrationConfidence>=CAL_MIN_CONF?`Cal ${Math.round(snap.cameraYawBiasDeg)}°/${Math.round(snap.calibrationConfidence*100)}%`:'Cal wait',edge=snap.outsideFov?' EDGE':'';line.textContent=`Axis ${state.workerReady?'Ready':'Fallback'} / Sel ${selText} / Full ${snap.fullUsable}/${snap.fullResults} / ${calText} / ${snap.anchorSource}${edge} / Meta ${Math.round(snap.metadataAnchor||50)}→${Math.round(snap.effectiveAnchor||50)} / ${dir}${Math.round(Math.abs(snap.appliedShift||0)*100)}%`;line.style.color='rgba(255,215,145,.96)';if(diagValue&&typeof diagValue==='object'){diagValue.version=VERSION;diagValue.travelAxisSnapshot=snap;}
+    const box=document.getElementById('journeyDiag');if(!box)return;const head=box.querySelector('.jd-head b');if(head)head.textContent='PHASE 1.6.1 DIAG';let line=document.getElementById('jdAxis');if(!line){line=document.createElement('div');line.id='jdAxis';const ref=document.getElementById('jdApplied')||document.getElementById('jdLine4');ref?.insertAdjacentElement('afterend',line);}const snap=state.snapshot(),dir=snap.appliedShift<-.008?'→':snap.appliedShift>.008?'←':'•',sel=snap.routeSelection,selText=String(sel?.strategy||'').startsWith('direction')?`${sel.direction==='reverse'?'REV':'FWD'} ${Number.isFinite(sel.alignmentErrorDeg)?Math.round(sel.alignmentErrorDeg)+'°':'—'}`:'FIX',calText=snap.calibrationConfidence>=CAL_MIN_CONF?`Cal ${Math.round(snap.cameraYawBiasDeg)}°/${Math.round(snap.calibrationConfidence*100)}%`:'Cal wait',edge=snap.outsideFov?' EDGE':'',pf=Array.isArray(sel?.visualPreflight)?sel.visualPreflight:[],pfOk=sel?.visualPreflightReady===true&&pf.length?Math.min(...pf.map(x=>Number(x.analysisSamples)||0)):0;line.textContent=`Axis ${state.workerReady?'Ready':'Fallback'} / Pre ${pfOk||0}p ${sel?.visualPreflightReady===false?'BLOCK':'OK'} / Sel ${selText} / Full ${snap.fullUsable}/${snap.fullResults} / ${calText} / ${snap.anchorSource}${edge} / Meta ${Math.round(snap.metadataAnchor||50)}→${Math.round(snap.effectiveAnchor||50)} / ${dir}${Math.round(Math.abs(snap.appliedShift||0)*100)}%`;line.style.color='rgba(255,215,145,.96)';if(diagValue&&typeof diagValue==='object'){diagValue.version=VERSION;diagValue.travelAxisSnapshot=snap;}
   }
   nativeSetTimeout(updateDiagnosticLine,120);setInterval(updateDiagnosticLine,250);
 })();

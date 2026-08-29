@@ -1,8 +1,21 @@
 # Streetview Journey
 
-Current version: **v0.1.29 Phase 1.6 Visual Heading Calibration**
+Current version: **v0.1.29 Phase 1.6.1 Visual Preflight Gate**
 
 iPhone Safari/PWA向け、Mapillary / KartaViewに画像が存在する道路・登山道・山・海岸・名所・展望地などを「そこへ向かって進んでいる」ように見せる Journey Engine を開発するプロジェクト。
+
+## v0.1.29 Phase 1.6.1 — Visual Preflight Gate
+- Phase 2には進まず、Phase 1.6のVisual Preflight成立保証だけを修正
+- candidate sequenceは最上位だけでなく、返された候補をすべて実画像Preflightする
+- 各candidateでルート全体に分散した最大5ペアを最初に解析し、画像ロードやWorker応答の失敗が混じった場合は別位置へ再試行する
+- **候補sequenceごとに最低3ペアの実画像Worker解析結果が成立するまでsequenceを確定しない**。成立数は通常3〜5ペア
+- 画像ロード前から進んでいた旧320ms timeoutを廃止。画像ロードとWorker応答を別timeoutに分離し、旧900msのVisual Preflight全体打ち切りも廃止
+- confidenceが低い `low-texture` 等は「実画像解析は成立」としてanalysisSamplesに記録し、Visual Axisとして使える結果だけusableSamplesへ分離する
+- 候補のどれかが最低3ペアに届かなければ `VISUAL_PREFLIGHT_INCOMPLETE` としてfail-closedし、Visual Preflight未成立のままJourneyを開始しない
+- 固定sequenceのJakartaもtop-level framesから単一candidateを生成し、同じ最低3ペアゲートを通す
+- `selection.visualPreflight` に `analysisSamples / usableSamples / attemptedPairs / established / required` を記録し、診断行にも `Pre 3〜5p` を表示する
+- 既存のVisual Heading Calibration / camera yaw bias / Full-image FOE / portrait補正 / Motion Worker / Safety Gate / Far-field / Tile Flow / edge-fillは変更しない
+- Vercel Functionは `api/imagery.js` 1個のまま。Function追加なし
 
 ## v0.1.29 Phase 1.6 — Visual Heading Calibration
 - 0.08秒をJourney Engineの標準速度として維持
