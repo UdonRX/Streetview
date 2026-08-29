@@ -1,4 +1,4 @@
-/* Streetview Journey v0.1.23 Motion Worker - adaptive multi-domain + forward rescue */
+/* Streetview Journey v0.1.24 Motion Worker - deterministic rescue + translation fallback */
 'use strict';
 self.window = self;
 try {
@@ -10,8 +10,9 @@ try {
 
 const MIN_TRACKS=8,RESCUE_MIN_TRACKS=12,TARGET_TRACKS=26,MAX_CORNERS=176;
 const FB_MIN=1.20,FB_MAX=2.70,FLOW_MIN=14,FLOW_MAX=26;
-const RANSAC_BASE=1.55,RANSAC_MAX=2.35,RANSAC_ITERATIONS=260;
-const MAX_STEP_X=4.8,MAX_STEP_Y=3.6,MAX_STEP_ROLL=.90,MAX_STEP_LOG_SCALE=.014;
+const RANSAC_BASE=1.55,RANSAC_MAX=2.35,RANSAC_ITERATIONS=280;
+const MODEL_SCALE_MIN=.92,MODEL_SCALE_MAX=1.08,MODEL_ROTATION_LIMIT=6.0;
+const MAX_STEP_X=4.6,MAX_STEP_Y=3.4,MAX_STEP_ROLL=.70,MAX_STEP_LOG_SCALE=.011;
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v)),deg=r=>r*180/Math.PI;
 const median=a=>{if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;return s.length&1?s[m]:(s[m-1]+s[m])*.5;};
 const mad=(a,m=median(a))=>median(a.map(v=>Math.abs(v-m)));
@@ -27,9 +28,9 @@ function createRng(seed){let x=((seed+1)*2654435761)>>>0;return()=>{x^=x<<13;x^=
 
 function similarityFromTwo(p,q){
   const sx=q.x0-p.x0,sy=q.y0-p.y0,tx=q.x1-p.x1,ty=q.y1-p.y1,den=sx*sx+sy*sy;
-  if(den<81)return null;
+  if(den<64)return null;
   const a=(sx*tx+sy*ty)/den,b=(sx*ty-sy*tx)/den,scale=Math.hypot(a,b),rotation=deg(Math.atan2(b,a));
-  if(!Number.isFinite(scale)||scale<.95||scale>1.05||Math.abs(rotation)>4)return null;
+  if(!Number.isFinite(scale)||scale<MODEL_SCALE_MIN||scale>MODEL_SCALE_MAX||Math.abs(rotation)>MODEL_ROTATION_LIMIT)return null;
   return{a,b,tx:p.x1-a*p.x0+b*p.y0,ty:p.y1-b*p.x0-a*p.y0,scale,rotation};
 }
 function fitSimilarity(points){
@@ -44,7 +45,7 @@ function fitSimilarity(points){
   }
   if(den<1e-5)return null;
   const a=A/den,b=B/den,scale=Math.hypot(a,b),rotation=deg(Math.atan2(b,a));
-  if(!Number.isFinite(scale)||scale<.95||scale>1.05||Math.abs(rotation)>4)return null;
+  if(!Number.isFinite(scale)||scale<MODEL_SCALE_MIN||scale>MODEL_SCALE_MAX||Math.abs(rotation)>MODEL_ROTATION_LIMIT)return null;
   return{a,b,tx:bx-a*ax+b*ay,ty:by-b*ax-a*ay,scale,rotation};
 }
 function reproj(m,p){
@@ -70,6 +71,20 @@ function ransacSimilarity(tracks,w,h,seed,threshold,iterations=RANSAC_ITERATIONS
   for(const p of tracks){const e=reproj(refined,p);if(e<=threshold*1.08){ins.push(p);errs.push(e);}}
   if(ins.length<MIN_TRACKS)return null;
   return{model:fitSimilarity(ins)||refined,inliers:ins,medianError:median(errs),coverage:coverage(ins,w,h),threshold};
+}
+
+function robustTranslation(domain,w,h){
+  if(domain.length<RESCUE_MIN_TRACKS)return null;
+  let dx=median(domain.map(p=>p.dx)),dy=median(domain.map(p=>p.dy));
+  let residuals=domain.map(p=>Math.hypot(p.dx-dx,p.dy-dy));
+  const rMed=median(residuals),rSigma=1.4826*mad(residuals,rMed),gate=clamp(Math.max(1.15,rMed+2.8*rSigma),1.15,3.5);
+  let inliers=domain.filter(p=>Math.hypot(p.dx-dx,p.dy-dy)<=gate);
+  if(inliers.length<RESCUE_MIN_TRACKS)return null;
+  dx=median(inliers.map(p=>p.dx));dy=median(inliers.map(p=>p.dy));
+  residuals=inliers.map(p=>Math.hypot(p.dx-dx,p.dy-dy));
+  const cov=coverage(inliers,w,h),ratio=inliers.length/domain.length,err=median(residuals);
+  if(ratio<.42||cov<.24||err>2.2)return null;
+  return{dx,dy,inliers,ratio,coverage:cov,medianError:err,gate};
 }
 
 function selectCorners(gray,w,h){
@@ -108,7 +123,7 @@ function baseResult(extra={}){
     coverage:0,globalCoverage:0,reprojection:0,fbMedian:0,fbThreshold:0,
     flowMedian:0,flowLimit:0,upperFlow:0,lowerFlow:0,depthRatio:1,parallaxFactor:1,
     confidence:0,dx:0,dy:0,roll:0,logScale:0,modelKind:'none',modelScore:0,
-    coherentTracks:0,backgroundTracks:0,lowMotionTracks:0,...extra
+    coherentTracks:0,backgroundTracks:0,lowMotionTracks:0,translationGate:0,...extra
   };
 }
 function modelStats(robust,domain,allTracks,w,h,kind,threshold,penalty=0){
@@ -129,19 +144,21 @@ function temporalStabilize(result,frameIndex){
   let out={...result};
   if(prev&&prev.source==='ransac'){
     const trust=clamp(result.confidence,0,1);
-    const risky=(result.parallaxFactor||1)>1.40||result.rescueUsed||result.modelKind==='background'||result.modelKind==='lowmotion';
-    const mix=risky?.42:(trust<.45?.28:.14);
+    const risky=(result.parallaxFactor||1)>1.40||result.rescueUsed||result.modelKind==='background'||result.modelKind==='lowmotion'||result.modelKind.startsWith('translation');
+    const mix=risky?.48:(trust<.50?.32:.18);
     out.roll=prev.roll*mix+result.roll*(1-mix);
     out.logScale=prev.logScale*mix+result.logScale*(1-mix);
-    out.dx=prev.dx*(risky?.34:.18)+result.dx*(risky?.66:.82);
-    out.dy=prev.dy*(risky?.34:.18)+result.dy*(risky?.66:.82);
-    const maxXY=risky?1.85:3.0,maxRoll=risky?.38:.52,maxScale=risky?.0055:.008;
+    out.dx=prev.dx*(risky?.40:.22)+result.dx*(risky?.60:.78);
+    out.dy=prev.dy*(risky?.40:.22)+result.dy*(risky?.60:.78);
+    const maxXY=risky?1.55:2.55,maxRoll=risky?.30:.42,maxScale=risky?.0045:.0065;
     out.dx=prev.dx+clamp(out.dx-prev.dx,-maxXY,maxXY);
     out.dy=prev.dy+clamp(out.dy-prev.dy,-maxXY,maxXY);
     out.roll=prev.roll+clamp(out.roll-prev.roll,-maxRoll,maxRoll);
     out.logScale=prev.logScale+clamp(out.logScale-prev.logScale,-maxScale,maxScale);
     out.temporalBlend=mix;
   }else out.temporalBlend=0;
+  out.roll=clamp(out.roll,-MAX_STEP_ROLL,MAX_STEP_ROLL);
+  out.logScale=clamp(out.logScale,-MAX_STEP_LOG_SCALE,MAX_STEP_LOG_SCALE);
   temporalModels.set(frameIndex,{source:out.source,dx:out.dx,dy:out.dy,roll:out.roll,logScale:out.logScale,confidence:out.confidence});
   if(temporalModels.size>24)for(const k of temporalModels.keys())if(k<frameIndex-10)temporalModels.delete(k);
   return out;
@@ -224,11 +241,11 @@ function analyze(msg){
     const forwardBackground=forwardCoherent.filter(p=>p.y0<h*.74);
     base.forwardCoherentTracks=forwardCoherent.length;
 
-    const rThreshold=clamp(RANSAC_BASE+Math.min(.55,flowMed*.038),RANSAC_BASE,RANSAC_MAX);
+    const rThreshold=clamp(RANSAC_BASE+Math.min(.60,flowMed*.040),RANSAC_BASE,RANSAC_MAX);
     const candidates=[];
     const pushCandidate=(kind,domain,bias=0,penalty=0,seedOffset=0)=>{
       if(domain.length<MIN_TRACKS)return;
-      const robust=ransacSimilarity(domain,w,h,seed+seedOffset,rThreshold,kind.startsWith('forward')?300:RANSAC_ITERATIONS);
+      const robust=ransacSimilarity(domain,w,h,seed+seedOffset,rThreshold,kind.startsWith('forward')?340:RANSAC_ITERATIONS);
       const s=modelStats(robust,domain,tracks.length?tracks:forwardFlow,w,h,kind,rThreshold,penalty);
       if(s){s.score+=bias;candidates.push(s);}
     };
@@ -242,13 +259,31 @@ function analyze(msg){
     }
 
     const fbHealth=base.fb/Math.max(1,base.lk);
-    const needsRescue=(tracks.length<MIN_TRACKS||fbHealth<.28)&&base.lk>=RESCUE_MIN_TRACKS;
-    if(needsRescue){
+    const rescueCandidates=()=>{
       pushCandidate('forward-coherent',forwardCoherent,.02,.11,71);
-      pushCandidate('forward-background',forwardBackground,base.parallaxFactor>1.35?.09:0,.13,89);
-    }
+      pushCandidate('forward-background',forwardBackground,base.parallaxFactor>1.35?.10:0,.12,89);
+    };
+    if(base.lk>=RESCUE_MIN_TRACKS&&(tracks.length<MIN_TRACKS||fbHealth<.36))rescueCandidates();
+    if(!candidates.length&&base.lk>=RESCUE_MIN_TRACKS)rescueCandidates();
 
     if(!candidates.length){
+      const translationDomain=(base.parallaxFactor>1.45&&forwardBackground.length>=RESCUE_MIN_TRACKS)
+        ? forwardBackground
+        : (forwardCoherent.length>=RESCUE_MIN_TRACKS?forwardCoherent:forwardFlow);
+      const tr=robustTranslation(translationDomain,w,h);
+      if(tr){
+        const countScore=clamp((tr.inliers.length-RESCUE_MIN_TRACKS+3)/TARGET_TRACKS,0,1),errScore=clamp(1-tr.medianError/2.2,0,1);
+        let confidence=clamp(.30*tr.ratio+.24*countScore+.24*tr.coverage+.22*errScore,0,1);
+        confidence=clamp(confidence*(base.parallaxFactor>1.8?.78:.86),.24,.58);
+        return{
+          ...base,source:'ransac',reason:'translation-rescue',modelKind:base.parallaxFactor>1.45?'translation-background':'translation-rescue',rescueUsed:true,
+          confidence,tracks:tr.inliers.length,rawTracks:tracks.length,
+          inliers:tr.inliers.length,inlierRatio:tr.ratio,domainTracks:translationDomain.length,domainInliers:tr.inliers.length,domainInlierRatio:tr.ratio,
+          coverage:tr.coverage,globalCoverage:tr.coverage,reprojection:tr.medianError,translationGate:tr.gate,
+          dx:clamp(tr.dx,-MAX_STEP_X,MAX_STEP_X),dy:clamp(tr.dy,-MAX_STEP_Y,MAX_STEP_Y),roll:0,logScale:0,
+          modelScore:confidence
+        };
+      }
       const rescueDomain=forwardCoherent.length>=RESCUE_MIN_TRACKS?forwardCoherent:forwardFlow;
       if(rescueDomain.length>=RESCUE_MIN_TRACKS){
         const dx=median(rescueDomain.map(p=>p.dx)),dy=median(rescueDomain.map(p=>p.dy));
@@ -287,16 +322,16 @@ function analyze(msg){
   }catch(error){error.journeyStage=stage;throw error;}
 }
 
-self.postMessage({type:'ready',engine:'jsfeat',build:'0.1.23'});
+self.postMessage({type:'ready',engine:'jsfeat',build:'0.1.24'});
 self.onmessage=event=>{
   const msg=event.data||{};if(msg.type!=='analyze')return;
   jobsReceived++;const started=performance.now();
   try{
-    const raw=analyze(msg),frameIndex=Math.round(((msg.seed||0)-(msg.width||0)*(msg.height||0))/31),result=temporalStabilize(raw,frameIndex);
+    const raw=analyze(msg),frameIndex=Number.isFinite(msg.frameIndex)?msg.frameIndex:Math.round(((msg.seed||0)-(msg.width||0)*(msg.height||0))/31),result=temporalStabilize(raw,frameIndex);
     jobsCompleted++;
     self.postMessage({type:'result',id:msg.id,result:{...result,frameIndex,ms:performance.now()-started,jobsReceived,jobsCompleted,jobsErrored}});
   }catch(error){
     jobsErrored++;jobsCompleted++;
-    self.postMessage({type:'result',id:msg.id,result:{...baseResult(),source:'worker-error',reason:'exception',error:String(error?.message||error),stage:error?.journeyStage||'unknown',ms:performance.now()-started,jobsReceived,jobsCompleted,jobsErrored}});
+    self.postMessage({type:'result',id:msg.id,result:{...baseResult(),source:'worker-error',reason:'exception',error:String(error?.message||error),stage:error?.journeyStage||'unknown',frameIndex:Number.isFinite(msg.frameIndex)?msg.frameIndex:undefined,ms:performance.now()-started,jobsReceived,jobsCompleted,jobsErrored}});
   }
 };
