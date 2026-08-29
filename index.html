@@ -11,13 +11,13 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/map.css" />
   <link rel="stylesheet" href="/phase3.css?v=0.3.0" />
-  <title>Streetview Journey — Phase 3 Destination</title>
+  <title>Streetview Journey — Phase 4 Preview</title>
 </head>
 <body>
   <main class="coverage-app">
     <div id="coverageMap" class="coverage-map" aria-label="MapillaryとKartaViewの撮影済みルート地図"></div>
     <header class="map-header">
-      <div><span class="phase">PHASE 3</span><strong>STREETVIEW</strong><small>撮影済みルートから旅を探す</small></div>
+      <div><span class="phase">PHASE 4 PREVIEW</span><strong>STREETVIEW</strong><small>到着地へ向かう撮影区間を選ぶ</small></div>
       <a class="journey-link" href="/journey.html">Journey Engine</a>
     </header>
     <section class="provider-panel" aria-label="撮影データ表示設定">
@@ -27,7 +27,7 @@
         <label class="provider-chip mapillary"><input id="mapillaryToggle" type="checkbox"><span class="dot"></span><span><b>Mapillary</b><small id="mapillaryStatus">トークン未設定</small></span></label>
         <button id="mapillarySettings" class="settings-button" type="button" aria-label="Mapillary設定">•••</button>
       </div>
-      <p class="hint">地図を動かして撮影済み道路を探せる。右上の現在地ボタンで近くへ移動。</p>
+      <p class="hint">到着地登録後に撮影済みルートをタップすると、そのsequence上の到着地側区間だけを表示。</p>
     </section>
   </main>
   <section id="tokenSheet" class="token-sheet" hidden aria-label="Mapillary access token設定">
@@ -36,7 +36,7 @@
   </section>
   <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
   <script src="/phase3.js?v=0.3.0"></script>
-  <script src="/map.js?v=0.2.2"></script>
+  <script src="/map.js?v=0.4.0"></script>
   <script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));</script>
 </body>
 </html>

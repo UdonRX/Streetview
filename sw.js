@@ -1,8 +1,8 @@
-/* Streetview Journey Phase 3 destination shell */
-const SHELL_CACHE='streetview-shell-phase3-v1';
+/* Streetview Journey Phase 4 preview shell */
+const SHELL_CACHE='streetview-shell-phase4-preview-v1';
 const IMAGE_CACHE='streetview-images-v0.1.0';
-const SHELL=['/','/index.html','/map.css','/phase3.css?v=0.3.0','/phase3.js?v=0.3.0','/map.js?v=0.2.2','/journey.html','/journey-map.html','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.30','/travel-axis-worker.js?v=0.1.30','/app.js?v=0.1.30','/diagnostics.js?v=0.1.30','/motion-worker.js?v=0.1.25','/manifest.webmanifest'];
-const IMAGE_LIMIT=100;
+const SHELL=['/','/index.html','/map.css','/phase3.css?v=0.3.0','/phase3.js?v=0.3.0','/map.js?v=0.4.0','/journey.html','/journey-map.html','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.30','/travel-axis-worker.js?v=0.1.30','/app.js?v=0.1.30','/diagnostics.js?v=0.1.30','/motion-worker.js?v=0.1.25','/manifest.webmanifest'];
+const IMAGE_LIMIT=160;
 const PASSTHROUGH_HOSTS=new Set(['tiles.openfreemap.org','api.openstreetcam.org','tiles.mapillary.com','graph.mapillary.com','overpass-api.de','ja.wikipedia.org','wikimedia.org','upload.wikimedia.org']);
 self.addEventListener('install',event=>{event.waitUntil(caches.open(SHELL_CACHE).then(cache=>cache.addAll(SHELL)));self.skipWaiting();});
 self.addEventListener('activate',event=>{event.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>![SHELL_CACHE,IMAGE_CACHE].includes(k)).map(k=>caches.delete(k)));await self.clients.claim();})());});

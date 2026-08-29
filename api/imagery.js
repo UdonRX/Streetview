@@ -1,38 +1,121 @@
-/* Streetview Journey Phase 2 direct KartaView sequence selection + Phase 1 route search */
+/* Streetview Journey Phase 4 preview: destination-aware full KartaView sequence segment */
 const KARTA_API='https://api.openstreetcam.org/2.0';
-const MAX_FRAMES=72,CANDIDATE_LIMIT=5,PAGE_SIZE=150;
-const PREFERRED_SEQUENCE_DISTANCE=1000,SOFT_SEQUENCE_DISTANCE=1800,MAX_SEQUENCE_DISTANCE=3000;
+const PAGE_SIZE=150;
+const MAX_PAGES=120;
 const DIRECT_TAP_LIMIT=220;
 
-function numberOrNull(v){if(v===null||v===undefined||v==='')return null;const n=Number(v);return Number.isFinite(n)?n:null;}
-function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function median(v){const a=v.filter(Number.isFinite).sort((x,y)=>x-y);if(!a.length)return null;const m=a.length>>1;return a.length&1?a[m]:(a[m-1]+a[m])*.5;}
-function wrap180(v){return((v+540)%360)-180;}
-function extractData(j){const d=j?.result?.data;if(Array.isArray(d))return d;if(d&&Array.isArray(d.photos))return d.photos;return[];}
-function sequenceIdOf(p){return String(p?.sequenceId??p?.sequence?.id??'').trim();}
-function imageUrlOf(p){return p?.fileurlLTh||p?.fileurlTh||p?.fileurlProc||p?.fileurl||null;}
-function normalizePhoto(p){const url=imageUrlOf(p);if(!url)return null;return{id:String(p.id??p.photoId??''),sequenceId:sequenceIdOf(p),sequenceIndex:numberOrNull(p.sequenceIndex),lat:numberOrNull(p.lat??p.matchLat),lng:numberOrNull(p.lng??p.matchLng),heading:numberOrNull(p.heading),projectionYaw:numberOrNull(p.projectionYaw),projection:p.projection||null,fieldOfView:numberOrNull(p.fieldOfView),width:numberOrNull(p.width),height:numberOrNull(p.height),url};}
-function hasCoords(p){return Number.isFinite(p?.lat)&&Number.isFinite(p?.lng);}
-function distanceMeters(a,b){if(!hasCoords(a)||!hasCoords(b))return Infinity;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dp=(b.lat-a.lat)*r,dl=(b.lng-a.lng)*r,s=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 12742000*Math.atan2(Math.sqrt(s),Math.sqrt(Math.max(0,1-s)));}
-function bearing(a,b){if(!hasCoords(a)||!hasCoords(b))return null;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lng-a.lng)*r,y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)/r+360)%360;}
-function headingOf(p){return Number.isFinite(p?.heading)?p.heading:(Number.isFinite(p?.projectionYaw)?p.projectionYaw:null);}
-function distanceGuard(d){if(!Number.isFinite(d)||d>MAX_SEQUENCE_DISTANCE)return{status:'blocked',allowed:false,penalty:1};if(d>SOFT_SEQUENCE_DISTANCE)return{status:'far',allowed:true,penalty:clamp((d-PREFERRED_SEQUENCE_DISTANCE)/(MAX_SEQUENCE_DISTANCE-PREFERRED_SEQUENCE_DISTANCE),0,1)};if(d>PREFERRED_SEQUENCE_DISTANCE)return{status:'soft',allowed:true,penalty:clamp((d-PREFERRED_SEQUENCE_DISTANCE)/(MAX_SEQUENCE_DISTANCE-PREFERRED_SEQUENCE_DISTANCE),0,1)};return{status:'ok',allowed:true,penalty:0};}
-function offsetPoint(lat,lng,n,e){return{lat:lat+n/111320,lng:lng+e/(111320*Math.max(.2,Math.cos(lat*Math.PI/180)))}};
-function normalizeList(photos){const seen=new Set(),out=[];for(const raw of photos){const p=normalizePhoto(raw)||raw;if(!p?.url)continue;const k=p.id||p.url||`${p.sequenceId}:${p.sequenceIndex}`;if(seen.has(k))continue;seen.add(k);out.push(p);}out.sort((a,b)=>(a.sequenceIndex??0)-(b.sequenceIndex??0));return out;}
-function anchorPosition(ps,idx){if(!ps.length)return 0;if(Number.isFinite(idx)){let at=ps.findIndex(p=>Number.isFinite(p.sequenceIndex)&&p.sequenceIndex>=idx);if(at>=0)return at;at=ps.findIndex(p=>Number.isFinite(p.sequenceIndex)&&Math.abs(p.sequenceIndex-idx)<=2);if(at>=0)return at;}return 0;}
-function evaluationWindow(ps,idx){const n=normalizeList(ps);if(n.length<=MAX_FRAMES)return n;const at=anchorPosition(n,idx),start=clamp(at-Math.floor(MAX_FRAMES*.35),0,n.length-MAX_FRAMES);return n.slice(start,start+MAX_FRAMES);}
-function playbackWindow(ps,idx,direction){const n=normalizeList(ps);if(!n.length)return[];const at=anchorPosition(n,idx);if(direction==='reverse'){let end=Math.min(n.length,at+1),start=Math.max(0,end-MAX_FRAMES);if(end-start<2){end=n.length;start=Math.max(0,end-MAX_FRAMES);}return n.slice(start,end).reverse();}let start=Math.min(Math.max(0,at),Math.max(0,n.length-1)),end=Math.min(n.length,start+MAX_FRAMES);if(end-start<2){start=Math.max(0,n.length-MAX_FRAMES);end=n.length;}return n.slice(start,end);}
-function localBearing(fs,i){const a=fs[i];if(!a)return null;let sx=0,sy=0,sw=0;for(let s=1;s<=7&&i+s<fs.length;s++){const b=fs[i+s],d=distanceMeters(a,b);if(!Number.isFinite(d)||d<.8)continue;const br=bearing(a,b),w=Math.min(d,18)/(1+.35*(s-1));sx+=Math.cos(br*Math.PI/180)*w;sy+=Math.sin(br*Math.PI/180)*w;sw+=w;if(d>=20)break;}return sw?(Math.atan2(sy,sx)*180/Math.PI+360)%360:null;}
-function alignmentStats(fs){const f=[],r=[],steps=[];let hs=0,gs=0;for(let i=0;i<fs.length-1;i++){const d=distanceMeters(fs[i],fs[i+1]);if(Number.isFinite(d)&&d<80)steps.push(d);const br=localBearing(fs,i);if(!Number.isFinite(br))continue;gs++;const hd=headingOf(fs[i]);if(!Number.isFinite(hd))continue;hs++;f.push(Math.abs(wrap180(hd-br)));r.push(Math.abs(wrap180(hd-((br+180)%360))));}const fe=median(f),re=median(r),ok=Number.isFinite(fe)&&Number.isFinite(re),direction=ok&&re+7<fe?'reverse':'forward',error=ok?(direction==='reverse'?re:fe):null,coverage=gs?hs/gs:0,moving=steps.filter(d=>d>=.35&&d<=45).length/Math.max(1,steps.length);return{direction,alignmentErrorDeg:error,forwardErrorDeg:fe,reverseErrorDeg:re,headingCoverage:coverage,orientationScore:ok?clamp(1-error/95,0,1):.46,continuityScore:clamp((fs.length-18)/54,0,1)*.55+clamp(moving,0,1)*.45,medianStepMeters:median(steps)};}
-async function fetchJson(url){const r=await fetch(url,{headers:{Accept:'application/json'}});if(!r.ok)throw new Error(`KartaView upstream ${r.status}`);const j=await r.json();if(Number(j?.status?.httpCode)>=400)throw new Error(`KartaView API ${j?.status?.apiCode||j?.status?.httpCode}`);return j;}
-async function nearbyAt(lat,lng,z=15){const q=new URLSearchParams({lat:String(lat),lng:String(lng),zoomLevel:String(z),join:'sequence',orderBy:'id',orderDirection:'desc'});try{return extractData(await fetchJson(`${KARTA_API}/photo/?${q}`));}catch{return[];}}
-async function sequencePage(id,page){const q=new URLSearchParams({sequenceId:id,page:String(Math.max(1,page)),itemsPerPage:String(PAGE_SIZE)});return extractData(await fetchJson(`${KARTA_API}/photo/?${q}`));}
-async function sequenceWindow(id,idx){const page=Number.isFinite(idx)?Math.floor(Math.max(0,idx)/PAGE_SIZE)+1:1,pages=[page];if(Number.isFinite(idx)){const o=((idx%PAGE_SIZE)+PAGE_SIZE)%PAGE_SIZE;if(o<54&&page>1)pages.unshift(page-1);if(o>PAGE_SIZE-55)pages.push(page+1);}let photos=normalizeList((await Promise.all(pages.map(p=>sequencePage(id,p).catch(()=>[])))).flat());const near=!Number.isFinite(idx)||photos.some(p=>Number.isFinite(p.sequenceIndex)&&Math.abs(p.sequenceIndex-idx)<=8);if((photos.length<2||!near)&&page!==1)photos=normalizeList([...photos,...await sequencePage(id,1).catch(()=>[])]);if(photos.length<2&&page===1)photos=normalizeList([...photos,...await sequencePage(id,2).catch(()=>[])]);return photos;}
-function directSelection(id,idx,distance,frames,alignment){return{version:'0.1.30',source:'KartaView',provider:'KartaView',sequenceId:id,anchorIndex:idx,selection:{strategy:'direct-nearest-photo',direction:alignment.direction,alignmentErrorDeg:alignment.alignmentErrorDeg,forwardErrorDeg:alignment.forwardErrorDeg,reverseErrorDeg:alignment.reverseErrorDeg,headingCoverage:alignment.headingCoverage,medianStepMeters:alignment.medianStepMeters,score:1,proximityMeters:distance,searchMode:'tap-direct',distanceGuard:{status:'direct',hardLimitMeters:DIRECT_TAP_LIMIT},candidateCount:1,metadataChosenSequenceId:id,visualOverride:false},frames,candidateRoutes:[{sequenceId:id,anchorIndex:idx,direction:alignment.direction,score:1,alignmentErrorDeg:alignment.alignmentErrorDeg,proximityMeters:distance,frames}]};}
-async function selectDirectTap(lat,lng){const target={lat,lng},raw=(await Promise.all([18,17,16,15].map(z=>nearbyAt(lat,lng,z)))).flat(),seen=new Set(),near=[];for(const x of raw){const p=normalizePhoto(x),id=sequenceIdOf(x);if(!p||!id||!hasCoords(p))continue;const key=p.id||`${id}:${p.sequenceIndex}`;if(seen.has(key))continue;seen.add(key);near.push({p,id,d:distanceMeters(target,p)});}near.sort((a,b)=>a.d-b.d);const hit=near[0];if(!hit||!Number.isFinite(hit.d)||hit.d>DIRECT_TAP_LIMIT)return null;const photos=await sequenceWindow(hit.id,hit.p.sequenceIndex),ev=evaluationWindow(photos,hit.p.sequenceIndex);if(ev.length<2)return null;const a=alignmentStats(ev),frames=playbackWindow(photos,hit.p.sequenceIndex,a.direction);if(frames.length<2)return null;return directSelection(hit.id,hit.p.sequenceIndex,hit.d,frames,a);}
-function addNearbyPhotos(raw,target,bySeq,mode){for(const x of raw){const id=sequenceIdOf(x),p=normalizePhoto(x);if(!id||!p||!hasCoords(p))continue;const d=distanceMeters(target,p),g=distanceGuard(d);if(!g.allowed)continue;const prev=bySeq.get(id);if(!prev||d<prev.distance)bySeq.set(id,{sequenceId:id,sequenceIndex:p.sequenceIndex,distance:d,photo:p,searchMode:mode,distanceGuard:g});}}
-async function nearbyCandidates(lat,lng){const target={lat,lng},bySeq=new Map(),zs=[15,14,13],center=await Promise.all(zs.map(z=>nearbyAt(lat,lng,z)));center.forEach((r,i)=>addNearbyPhotos(r,target,bySeq,`center-z${zs[i]}`));if(bySeq.size<3){const os=[[-1200,0],[1200,0],[0,-1200],[0,1200],[-2100,-2100],[-2100,2100],[2100,-2100],[2100,2100]],probes=await Promise.all(os.map(([n,e])=>{const p=offsetPoint(lat,lng,n,e);return nearbyAt(p.lat,p.lng,15);}));probes.forEach((r,i)=>addNearbyPhotos(r,target,bySeq,`probe-${i+1}`));}return[...bySeq.values()].sort((a,b)=>a.distance-b.distance).slice(0,CANDIDATE_LIMIT);}
-async function evaluateCandidate(c){try{const g=distanceGuard(c.distance);if(!g.allowed)return null;const ps=await sequenceWindow(c.sequenceId,c.sequenceIndex),ev=evaluationWindow(ps,c.sequenceIndex);if(ev.length<2)return null;const a=alignmentStats(ev),prox=clamp(1-c.distance/MAX_SEQUENCE_DISTANCE,0,1),rel=clamp(a.headingCoverage/.55,0,1),dir=a.orientationScore*(.55+.45*rel),score=.48*dir+.22*prox+.20*a.continuityScore+.10*clamp(ev.length/MAX_FRAMES,0,1)-.18*g.penalty,frames=playbackWindow(ps,c.sequenceIndex,a.direction);return{...c,frames,alignment:a,score,distanceGuard:g};}catch{return null;}}
-async function selectNearbyRoute(lat,lng){const cs=await nearbyCandidates(lat,lng);if(!cs.length)return null;const ev=(await Promise.all(cs.map(evaluateCandidate))).filter(Boolean).filter(c=>c.frames.length>=2).sort((a,b)=>b.score-a.score);if(!ev.length)return null;const b=ev[0],g=distanceGuard(b.distance);return{version:'0.1.30',source:'KartaView',provider:'KartaView',sequenceId:b.sequenceId,anchorIndex:b.sequenceIndex,frames:b.frames,candidateRoutes:ev.slice(0,3).map(c=>({sequenceId:c.sequenceId,anchorIndex:c.sequenceIndex,direction:c.alignment.direction,score:c.score,alignmentErrorDeg:c.alignment.alignmentErrorDeg,proximityMeters:c.distance,frames:c.frames})),selection:{strategy:'direction-aware-distance-guard',direction:b.alignment.direction,alignmentErrorDeg:b.alignment.alignmentErrorDeg,forwardErrorDeg:b.alignment.forwardErrorDeg,reverseErrorDeg:b.alignment.reverseErrorDeg,headingCoverage:b.alignment.headingCoverage,medianStepMeters:b.alignment.medianStepMeters,score:b.score,proximityMeters:b.distance,searchMode:b.searchMode,distanceGuard:{status:g.status,preferredMeters:PREFERRED_SEQUENCE_DISTANCE,softMeters:SOFT_SEQUENCE_DISTANCE,hardLimitMeters:MAX_SEQUENCE_DISTANCE},candidateCount:ev.length,candidates:ev.slice(0,5).map(c=>({sequenceId:c.sequenceId,direction:c.alignment.direction,alignmentErrorDeg:c.alignment.alignmentErrorDeg,score:c.score,proximityMeters:c.distance,frames:c.frames.length}))}};}
+function num(v){const n=Number(v);return Number.isFinite(n)?n:null;}
+function extract(j){const d=j?.result?.data;if(Array.isArray(d))return d;if(d&&Array.isArray(d.photos))return d.photos;return[];}
+function sid(p){return String(p?.sequenceId??p?.sequence?.id??'').trim();}
+function imageUrl(p){return p?.fileurlLTh||p?.fileurlTh||p?.fileurlProc||p?.fileurl||null;}
+function norm(p){const url=imageUrl(p);if(!url)return null;return{id:String(p.id??p.photoId??''),sequenceId:sid(p),sequenceIndex:num(p.sequenceIndex),lat:num(p.lat??p.matchLat),lng:num(p.lng??p.matchLng),heading:num(p.heading),projectionYaw:num(p.projectionYaw),projection:p.projection||null,fieldOfView:num(p.fieldOfView),width:num(p.width),height:num(p.height),url,provider:'KartaView'};}
+function coords(p){return Number.isFinite(p?.lat)&&Number.isFinite(p?.lng);}
+function dist(a,b){if(!coords(a)||!coords(b))return Infinity;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dp=(b.lat-a.lat)*r,dl=(b.lng-a.lng)*r,s=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 12742000*Math.atan2(Math.sqrt(s),Math.sqrt(Math.max(0,1-s)));}
+function dedupe(list){const seen=new Set(),out=[];for(const raw of list){const p=norm(raw)||raw;if(!p?.url)continue;const k=p.id||`${p.sequenceId}:${p.sequenceIndex}`||p.url;if(seen.has(k))continue;seen.add(k);out.push(p);}out.sort((a,b)=>(a.sequenceIndex??0)-(b.sequenceIndex??0));return out;}
+async function json(url){const r=await fetch(url,{headers:{Accept:'application/json'}});if(!r.ok)throw new Error(`KartaView upstream ${r.status}`);const j=await r.json();if(Number(j?.status?.httpCode)>=400)throw new Error(`KartaView API ${j?.status?.apiCode||j?.status?.httpCode}`);return j;}
+async function nearby(lat,lng,z){const q=new URLSearchParams({lat:String(lat),lng:String(lng),zoomLevel:String(z),join:'sequence',orderBy:'id',orderDirection:'desc'});try{return extract(await json(`${KARTA_API}/photo/?${q}`));}catch{return[];}}
+async function page(sequenceId,pageNo){const q=new URLSearchParams({sequenceId,page:String(pageNo),itemsPerPage:String(PAGE_SIZE)});return extract(await json(`${KARTA_API}/photo/?${q}`));}
+async function allSequence(sequenceId){
+  const first=await page(sequenceId,1);
+  let all=[...first];
+  if(first.length<PAGE_SIZE)return dedupe(all);
+  for(let start=2;start<=MAX_PAGES;start+=4){
+    const nums=[start,start+1,start+2,start+3].filter(x=>x<=MAX_PAGES);
+    const chunks=await Promise.all(nums.map(p=>page(sequenceId,p).catch(()=>[])));
+    chunks.forEach(c=>all.push(...c));
+    if(chunks.some(c=>c.length<PAGE_SIZE))break;
+  }
+  return dedupe(all);
+}
+function nearestIndex(frames,target){let best=-1,bd=Infinity;for(let i=0;i<frames.length;i++){const d=dist(frames[i],target);if(d<bd){bd=d;best=i;}}return{index:best,distance:bd};}
+function routeSegment(frames,startIndex,dest){
+  if(!frames.length)return{frames:[],destinationDistanceMeters:null,startIndex:0,endIndex:0};
+  const start=Math.max(0,Math.min(frames.length-1,startIndex));
+  if(!dest)return{frames:frames.slice(start),destinationDistanceMeters:null,startIndex:start,endIndex:frames.length-1};
+  const hit=nearestIndex(frames,dest);
+  if(hit.index<0)return{frames:frames.slice(start),destinationDistanceMeters:null,startIndex:start,endIndex:frames.length-1};
+  const section=hit.index>=start?frames.slice(start,hit.index+1):frames.slice(hit.index,start+1).reverse();
+  return{frames:section.length>=2?section:frames.slice(start),destinationDistanceMeters:hit.distance,startIndex:start,endIndex:hit.index};
+}
+async function directTap(lat,lng,dest){
+  const target={lat,lng};
+  const raw=(await Promise.all([18,17,16,15].map(z=>nearby(lat,lng,z)))).flat();
+  const seen=new Set(),hits=[];
+  for(const x of raw){
+    const p=norm(x),sequenceId=sid(x);
+    if(!p||!sequenceId||!coords(p))continue;
+    const k=p.id||`${sequenceId}:${p.sequenceIndex}`;
+    if(seen.has(k))continue;seen.add(k);
+    hits.push({p,sequenceId,distance:dist(target,p)});
+  }
+  hits.sort((a,b)=>a.distance-b.distance);
+  const hit=hits[0];
+  if(!hit||!Number.isFinite(hit.distance)||hit.distance>DIRECT_TAP_LIMIT)return null;
 
-module.exports=async function handler(req,res){res.setHeader('Cache-Control','public, s-maxage=120, stale-while-revalidate=600');res.setHeader('Content-Type','application/json; charset=utf-8');try{if((req.query.source||'karta')!=='karta')return res.status(400).json({error:'KartaViewルートのみこのAPIで扱います'});let id=String(req.query.sequence||'').trim(),idx=numberOrNull(req.query.index);if(req.query.mode==='nearest'){const lat=Number(req.query.lat),lng=Number(req.query.lng);if(!Number.isFinite(lat)||!Number.isFinite(lng))return res.status(400).json({error:'有効な緯度・経度が必要です'});const direct=await selectDirectTap(lat,lng);if(!direct)return res.status(404).json({error:`タップ地点から${DIRECT_TAP_LIMIT}m以内に直接選択できるKartaView sequenceが見つかりませんでした`});return res.status(200).json(direct);}if(!id){const lat=Number(req.query.lat),lng=Number(req.query.lng);if(!Number.isFinite(lat)||!Number.isFinite(lng))return res.status(400).json({error:'有効な緯度・経度が必要です'});const route=await selectNearbyRoute(lat,lng);if(!route)return res.status(404).json({error:`この周辺${MAX_SEQUENCE_DISTANCE}m以内では再生できるKartaViewの連続写真が見つかりませんでした`});return res.status(200).json(route);}const ps=await sequenceWindow(id,idx),ev=evaluationWindow(ps,idx),a=alignmentStats(ev),frames=playbackWindow(ps,idx,a.direction);if(frames.length<2)return res.status(404).json({error:'再生可能な画像が不足しています'});return res.status(200).json(directSelection(id,idx,0,frames,a));}catch(e){console.error('imagery route error',e);return res.status(502).json({error:'KartaViewからルートを取得できませんでした'});}};
+  const frames=await allSequence(hit.sequenceId);
+  if(frames.length<2)return null;
+  let anchor=frames.findIndex(f=>f.id===hit.p.id);
+  if(anchor<0&&Number.isFinite(hit.p.sequenceIndex)){
+    let bd=Infinity;
+    for(let i=0;i<frames.length;i++){
+      if(!Number.isFinite(frames[i].sequenceIndex))continue;
+      const d=Math.abs(frames[i].sequenceIndex-hit.p.sequenceIndex);
+      if(d<bd){bd=d;anchor=i;}
+    }
+  }
+  if(anchor<0)anchor=0;
+  const seg=routeSegment(frames,anchor,dest);
+  if(seg.frames.length<2)return null;
+
+  return{
+    version:'0.4.0',
+    source:'KartaView',
+    provider:'KartaView',
+    sequenceId:hit.sequenceId,
+    anchorIndex:anchor,
+    destination:dest||null,
+    selection:{
+      strategy:dest?'destination-sequence-segment':'direct-nearest-photo-full',
+      direction:seg.endIndex>=seg.startIndex?'forward':'reverse',
+      proximityMeters:hit.distance,
+      destinationDistanceMeters:seg.destinationDistanceMeters,
+      searchMode:'tap-direct-full',
+      candidateCount:1,
+      visualOverride:false,
+      totalSequenceFrames:frames.length,
+      segmentStartIndex:seg.startIndex,
+      segmentEndIndex:seg.endIndex
+    },
+    frames:seg.frames,
+    candidateRoutes:[]
+  };
+}
+
+module.exports=async function handler(req,res){
+  res.setHeader('Cache-Control','public, s-maxage=60, stale-while-revalidate=300');
+  res.setHeader('Content-Type','application/json; charset=utf-8');
+  try{
+    if((req.query.source||'karta')!=='karta')return res.status(400).json({error:'KartaViewルートのみこのAPIで扱います'});
+    if(req.query.mode==='nearest'){
+      const lat=Number(req.query.lat),lng=Number(req.query.lng);
+      if(!Number.isFinite(lat)||!Number.isFinite(lng))return res.status(400).json({error:'有効な緯度・経度が必要です'});
+      const dl=Number(req.query.destLat),dn=Number(req.query.destLng);
+      const dest=Number.isFinite(dl)&&Number.isFinite(dn)?{lat:dl,lng:dn}:null;
+      const route=await directTap(lat,lng,dest);
+      if(!route)return res.status(404).json({error:`タップ地点から${DIRECT_TAP_LIMIT}m以内に直接選択できるKartaView sequenceが見つかりませんでした`});
+      return res.status(200).json(route);
+    }
+
+    const sequenceId=String(req.query.sequence||'').trim();
+    if(sequenceId){
+      const frames=await allSequence(sequenceId);
+      if(frames.length<2)return res.status(404).json({error:'再生可能な画像が不足しています'});
+      return res.status(200).json({version:'0.4.0',source:'KartaView',provider:'KartaView',sequenceId,selection:{strategy:'full-sequence',totalSequenceFrames:frames.length},frames,candidateRoutes:[]});
+    }
+
+    return res.status(400).json({error:'Phase 4 previewでは地図上の撮影ルートを直接タップしてください'});
+  }catch(e){
+    console.error('imagery route error',e);
+    return res.status(502).json({error:'KartaViewからルートを取得できませんでした'});
+  }
+};
