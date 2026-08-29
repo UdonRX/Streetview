@@ -1,30 +1,32 @@
 # Streetview Journey
 
-Current version: **v0.1.15 Phase 1.1 Camera Path Tune**
+Current version: **v0.1.16 Phase 1.2 Similarity RANSAC**
 
 iPhone Safari/PWA向け、Mapillary / KartaViewに画像が存在する道路・登山道・山・海岸・名所・展望地などを「そこへ向かって進んでいる」ように見せる Journey Engine を開発するプロジェクト。
 
-## v0.1.15 Phase 1.1 Camera Path Tune
-- 0.08秒を今後の標準速度として固定。通常UIでは0.08秒だけを表示
-- 比較基盤は残し、URLに `?compare=1` を付けたときだけ 0.08 / 0.10 / 0.12秒を選択可能
-- OpenCV特徴点追跡の閾値をiPhone向けに調整し、利用できる背景特徴点を増加
-- OpenCVが低〜中信頼のときに完全破棄せず、Far-field推定とconfidenceに応じて混合
-- Camera Pathの平滑化を5フレーム相当から7フレーム相当へ拡張
-- X/Y・残留roll・微小scaleをVirtual Camera Pathとして平滑化し、画像切替時の傾き・中心ジャンプを抑制
-- Roll自体も時間方向の追従を弱め、写真単位の左右揺れを抑制
-- 9% Overscanを追加し、Camera Stabilizationで露出する上下左右の黒い画面端を隠す
-- Journey Engine左上に「戻る」を追加し、再読み込みせずTOPへ戻れるようにした
-- HUDに現在confidenceに加えて `Avg` を表示。iPhoneのスクリーンショットだけで平均confidenceを確認可能
-- OpenCVが使えない場面・特徴点が少ない場面ではFar-field + Tile Flowへ自動フォールバック
+## v0.1.16 Phase 1.2 — Similarity RANSAC
+- 0.08秒をJourney Engineの標準速度として維持。通常UIは0.08秒のみ、`?compare=1`で比較UIを再表示可能
+- Shi-Tomasi特徴点 + Pyramidal Lucas-Kanade Optical Flowを継続
+- **Forward-Backward tracking validation** を追加し、A→Bで追えた点をB→Aへ戻して一致しない特徴点を除外
+- **Pairwise Similarity RANSAC** を追加。複数特徴点からX/Y・回転・scaleを1つの幾何変換としてロバスト推定
+- RANSAC inlierだけでSimilarity transformを最小二乗再フィットし、動く車・人や局所的な誤追跡の影響を低減
+- 特徴点の **spatial coverage** をconfidenceに入れ、画面の一部分だけで姿勢を決めにくくした
+- Metadata由来のcrop centerも前後5フレームで平滑化し、heading揺れによる中心ジャンプを抑制
+- RANSACが中信頼のときはFar-fieldと重み付き統合、低信頼時は従来Far-fieldへfail-soft fallback
+- 7フレーム相当のVirtual Camera PathでX/Y・roll・scaleを平滑化
+- 描画側はforegroundを16% Overscanし、さらに38%拡大したedge-fill背景を敷いて、回転/平行移動で下端・角に黒領域が露出するのを防止
+- HUDは `RS xx% / Mix xx%` と `Avg` を表示。`RS`はRANSACベースの追跡がCamera Pathへ主に採用されている状態
+- `window.__journeyDiagnostics` にRANSAC inlier ratio、spatial coverage、reprojection error、Forward-Backward errorも保持
 - Vercel Functionは `api/imagery.js` 1個のまま
 
-## Phase 1.1 判定基準
-- Jakartaデモのような特徴の多い場面では、`Avg` が目安として10〜15%以上に上がること。Mix表示自体は異常ではない
-- 遠景の建物・道路奥・空と建物の境界を注視したとき、v0.1.14より傾きと上下左右のジャンプが明確に減ること
-- 画面上下左右の黒端がほぼ見えないこと
-- 0.08秒の速度感・連続感がv0.1.14から悪化しないこと
-- 周期的なズーム、過度なクロップ、画面全体の漂いが新たに目立たないこと
-- OpenCV低信頼区間でも停止せず、Mix/Far-fieldで再生を継続すること
+## Phase 1.2 判定基準
+- Jakartaデモでは `RS` が継続的に現れ、`Avg` がPhase 1.1の9%から明確に上がること。目安は **20%以上、できれば30%以上**
+- 遠景の建物・道路奥など一点を見続けた際、画像切替ごとの傾きがPhase 1.1より明確に小さいこと
+- 同じ遠景対象の左右・上下への「カクッ」という中心ジャンプが明確に小さいこと
+- 画面下端を含め黒い画面端が見えないこと。極端な補正時も黒ではなくedge-fillで継続すること
+- 0.08秒の速度感・連続感を維持し、解析追加による長い停止が連発しないこと
+- 周期的なズーム呼吸や強い画角変化が新たに目立たないこと
+- RANSACが成立しない空・海・白壁などでもMix/Far-fieldへ戻ってJourneyが停止しないこと
 
 ## Roadmap
 1. Phase 1: 0.08秒 Camera Stabilization
@@ -38,4 +40,4 @@ iPhone Safari/PWA向け、Mapillary / KartaViewに画像が存在する道路・
 9. Phase 9: 道路・登山道・森・山・海岸・展望地・360/Fisheyeの全地形対応
 10. Phase 10: 仮想現在時刻・ETA・移動距離・残距離・到着演出を含むJourney UX
 
-> バージョンごとにファイルを増やさず、既存ファイル内のバージョン表記を更新する方針。
+> バージョンごとにファイルを増やさず、既存ファイル内のバージョン表記を更新する。Vercel Hobby内・Function 1個を維持する。
