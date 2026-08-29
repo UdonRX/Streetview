@@ -1,4 +1,4 @@
-/* Streetview Journey v0.1.24 Motion Worker - deterministic rescue + translation fallback */
+/* Streetview Journey v0.1.25 Motion Worker - worst-pair safety gate */
 'use strict';
 self.window = self;
 try {
@@ -122,7 +122,7 @@ function baseResult(extra={}){
     inliers:0,inlierRatio:0,domainTracks:0,domainInliers:0,domainInlierRatio:0,
     coverage:0,globalCoverage:0,reprojection:0,fbMedian:0,fbThreshold:0,
     flowMedian:0,flowLimit:0,upperFlow:0,lowerFlow:0,depthRatio:1,parallaxFactor:1,
-    confidence:0,dx:0,dy:0,roll:0,logScale:0,modelKind:'none',modelScore:0,
+    confidence:0,rawConfidence:0,safetyFactor:1,safetyFlags:'',dx:0,dy:0,roll:0,logScale:0,modelKind:'none',modelScore:0,
     coherentTracks:0,backgroundTracks:0,lowMotionTracks:0,translationGate:0,...extra
   };
 }
@@ -136,6 +136,16 @@ function modelStats(robust,domain,allTracks,w,h,kind,threshold,penalty=0){
   const score=.40*domainRatio+.20*countScore+.22*robust.coverage+.18*errScore-penalty;
   return{kind,robust,domainTracks:domain.length,domainInliers:robust.inliers.length,domainRatio,globalInliers,globalRatio,score,penalty};
 }
+function safetyGate(base,chosen,medianError,isRescue,confidence){
+  let factor=1;const flags=[];
+  if(chosen.robust.coverage<.25){factor*=.70;flags.push('coverage');}
+  if(chosen.globalRatio<.35){factor*=.78;flags.push('global-inlier');}
+  if(chosen.domainRatio<.45){factor*=.78;flags.push('domain-inlier');}
+  if(medianError>1.0){factor*=.82;flags.push('reprojection');}
+  if(base.parallaxFactor>2.4&&chosen.globalRatio<.35){factor*=.55;flags.push('extreme-parallax');}
+  if(isRescue&&chosen.globalRatio<.30){factor*=.55;flags.push('rescue-global');}
+  return{rawConfidence:confidence,safetyFactor:factor,safetyFlags:flags.join(','),confidence:clamp(confidence*factor,0,1)};
+}
 
 function temporalStabilize(result,frameIndex){
   if(!Number.isFinite(frameIndex)||result.source!=='ransac')return result;
@@ -144,7 +154,8 @@ function temporalStabilize(result,frameIndex){
   let out={...result};
   if(prev&&prev.source==='ransac'){
     const trust=clamp(result.confidence,0,1);
-    const risky=(result.parallaxFactor||1)>1.40||result.rescueUsed||result.modelKind==='background'||result.modelKind==='lowmotion'||result.modelKind.startsWith('translation');
+    const guarded=(result.safetyFactor??1)<.95;
+    const risky=(result.parallaxFactor||1)>1.40||result.rescueUsed||guarded||result.modelKind==='background'||result.modelKind==='lowmotion'||result.modelKind.startsWith('translation');
     const mix=risky?.48:(trust<.50?.32:.18);
     out.roll=prev.roll*mix+result.roll*(1-mix);
     out.logScale=prev.logScale*mix+result.logScale*(1-mix);
@@ -277,7 +288,7 @@ function analyze(msg){
         confidence=clamp(confidence*(base.parallaxFactor>1.8?.78:.86),.24,.58);
         return{
           ...base,source:'ransac',reason:'translation-rescue',modelKind:base.parallaxFactor>1.45?'translation-background':'translation-rescue',rescueUsed:true,
-          confidence,tracks:tr.inliers.length,rawTracks:tracks.length,
+          confidence,rawConfidence:confidence,safetyFactor:1,safetyFlags:'translation',tracks:tr.inliers.length,rawTracks:tracks.length,
           inliers:tr.inliers.length,inlierRatio:tr.ratio,domainTracks:translationDomain.length,domainInliers:tr.inliers.length,domainInlierRatio:tr.ratio,
           coverage:tr.coverage,globalCoverage:tr.coverage,reprojection:tr.medianError,translationGate:tr.gate,
           dx:clamp(tr.dx,-MAX_STEP_X,MAX_STEP_X),dy:clamp(tr.dy,-MAX_STEP_Y,MAX_STEP_Y),roll:0,logScale:0,
@@ -287,7 +298,7 @@ function analyze(msg){
       const rescueDomain=forwardCoherent.length>=RESCUE_MIN_TRACKS?forwardCoherent:forwardFlow;
       if(rescueDomain.length>=RESCUE_MIN_TRACKS){
         const dx=median(rescueDomain.map(p=>p.dx)),dy=median(rescueDomain.map(p=>p.dy));
-        return{...base,source:'worker-low',confidence:.12,tracks:rescueDomain.length,dx:clamp(dx,-MAX_STEP_X,MAX_STEP_X),dy:clamp(dy,-MAX_STEP_Y,MAX_STEP_Y),reason:'forward-consensus',rescueUsed:true,modelKind:'forward-consensus'};
+        return{...base,source:'worker-low',confidence:.12,rawConfidence:.12,safetyFactor:1,safetyFlags:'forward-consensus',tracks:rescueDomain.length,dx:clamp(dx,-MAX_STEP_X,MAX_STEP_X),dy:clamp(dy,-MAX_STEP_Y,MAX_STEP_Y),reason:'forward-consensus',rescueUsed:true,modelKind:'forward-consensus'};
       }
       return{...base,source:'fallback',reason:tracks.length<MIN_TRACKS?'fb':'ransac'};
     }
@@ -306,10 +317,12 @@ function analyze(msg){
     let confidence=clamp(.30*chosen.domainRatio+.21*countScore+.19*chosen.robust.coverage+.17*errScore+.07*fbScore+.06*clamp((base.fbRatio-.18)/.50,0,1),0,1);
     if((chosen.kind==='background'||chosen.kind==='lowmotion')&&base.parallaxFactor>1.35)confidence=clamp(confidence+.06,0,1);
     if(isRescue)confidence=clamp(confidence*.80,0,.62);
+    const safety=safetyGate(base,chosen,medianError,isRescue,confidence);
+    confidence=safety.confidence;
 
     const globalCov=coverage(chosen.globalInliers,w,h);
     return{
-      ...base,source:'ransac',confidence,tracks:chosen.domainInliers,rawTracks:tracks.length,
+      ...base,source:'ransac',confidence,rawConfidence:safety.rawConfidence,safetyFactor:safety.safetyFactor,safetyFlags:safety.safetyFlags,tracks:chosen.domainInliers,rawTracks:tracks.length,
       inliers:chosen.globalInliers.length,inlierRatio:chosen.globalRatio,
       domainTracks:chosen.domainTracks,domainInliers:chosen.domainInliers,domainInlierRatio:chosen.domainRatio,
       coverage:chosen.robust.coverage,globalCoverage:globalCov,reprojection:medianError,fbMedian:fbm,
@@ -322,7 +335,7 @@ function analyze(msg){
   }catch(error){error.journeyStage=stage;throw error;}
 }
 
-self.postMessage({type:'ready',engine:'jsfeat',build:'0.1.24'});
+self.postMessage({type:'ready',engine:'jsfeat',build:'0.1.25'});
 self.onmessage=event=>{
   const msg=event.data||{};if(msg.type!=='analyze')return;
   jobsReceived++;const started=performance.now();

@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.24 diagnostics + lossless worker tap */
+/* Streetview Journey v0.1.25 diagnostics + worst-pair safety logging */
 (()=>{
-  const DIAG_VERSION='0.1.24';
+  const DIAG_VERSION='0.1.25';
   const $=id=>document.getElementById(id);
   const pairs=new Map();
   const workerResultCache=new Map();
@@ -12,7 +12,7 @@
     window.__journeyWorkerTapInstalled=true;
     const WrappedWorker=function(url,options){
       const isMotion=String(url||'').includes('motion-worker.js');
-      const actualUrl=isMotion?'/motion-worker.js?v=0.1.24':url;
+      const actualUrl=isMotion?'/motion-worker.js?v=0.1.25':url;
       const worker=new NativeWorker(actualUrl,options);
       if(!isMotion)return worker;
       const nativePost=worker.postMessage.bind(worker);
@@ -63,15 +63,15 @@
 
   function install(){
     const viewer=$('viewer');if(!viewer||$('journeyDiag'))return;
-    const eyebrow=document.querySelector('.start-card .eyebrow');if(eyebrow)eyebrow.textContent='v0.1.24 PHASE 1.3.4 DETERMINISTIC RESCUE';
-    const title=document.querySelector('.start-card h1');if(title)title.textContent='0.08秒のまま、弱い区間を取りこぼさない。';
-    const lead=document.querySelector('.start-card .lead');if(lead)lead.textContent='Similarityが成立しない区間をForward再評価＋Translation救済で補い、同じJourneyの解析結果は再利用。全71ペアを取りこぼさず記録する。';
-    const preset=document.querySelector('.preset-title');if(preset)preset.textContent='Phase 1.3.4 Deterministic Motion Rescue';
+    const eyebrow=document.querySelector('.start-card .eyebrow');if(eyebrow)eyebrow.textContent='v0.1.25 PHASE 1.3.5 WORST-PAIR SAFETY';
+    const title=document.querySelector('.start-card h1');if(title)title.textContent='0.08秒のまま、最悪フレームだけ安全側へ逃がす。';
+    const lead=document.querySelector('.start-card .lead');if(lead)lead.textContent='RANSACは維持しつつ、Coverage・Global Inlier・再投影誤差・強視差をSafety Gateで再評価。危険な推定だけBlend/Far-fieldへ逃がす。';
+    const preset=document.querySelector('.preset-title');if(preset)preset.textContent='Phase 1.3.5 Worst-pair Safety Gate';
 
     const box=document.createElement('section');
     box.id='journeyDiag';box.hidden=true;box.setAttribute('aria-label','Journey Engine 診断値');
     box.innerHTML=`
-      <div class="jd-head"><b>PHASE 1.3.4 DIAG</b><span id="jdVerdict">待機中</span></div>
+      <div class="jd-head"><b>PHASE 1.3.5 DIAG</b><span id="jdVerdict">待機中</span></div>
       <div id="jdLine0">Worker —</div>
       <div id="jdLine1">Frame — / Source —</div>
       <div id="jdLine2">Pts — → LK — → FB —</div>
@@ -99,6 +99,7 @@
     if(p.source==='worker-error')return`解析エラー:${p.stage||'unknown'}`;
     if((p.corners||0)<8)return'特徴点不足';
     if((p.lkRatio||0)<.45)return'LK追跡を改善余地';
+    if((p.safetyFactor??1)<.95)return`Safety Gate ${pct(p.safetyFactor)} → Blend/Far`;
     if(String(p.modelKind||'').startsWith('translation'))return pf(p)>1.45?'Translation救済＋視差回避':'Translation救済';
     if(p.rescueUsed&&p.source==='ransac')return pf(p)>1.45?'Forward救済＋視差回避':'Forward救済RANSAC';
     if(p.source!=='ransac')return(p.fbRatio||0)<.22?'FB追跡不足':pf(p)>1.45?'視差強→背景モデル不足':'RANSAC未成立';
@@ -109,7 +110,7 @@
   }
 
   function normalizedPair(p,d){
-    const keys=['frame','frameIndex','source','reason','modelKind','rescueUsed','cacheHit','ms','detected','corners','lk','lkRatio','fb','fbRatio','fbThreshold','forwardTracks','forwardCoherentTracks','inliers','inlierRatio','domainTracks','domainInliers','domainInlierRatio','coverage','globalCoverage','reprojection','fbMedian','flowMedian','flowLimit','upperFlow','lowerFlow','depthRatio','parallaxFactor','confidence','dx','dy','roll','logScale','modelScore','coherentTracks','backgroundTracks','lowMotionTracks','translationGate','jobsReceived','jobsCompleted','jobsErrored'];
+    const keys=['frame','frameIndex','source','reason','modelKind','rescueUsed','cacheHit','ms','detected','corners','lk','lkRatio','fb','fbRatio','fbThreshold','forwardTracks','forwardCoherentTracks','inliers','inlierRatio','domainTracks','domainInliers','domainInlierRatio','coverage','globalCoverage','reprojection','fbMedian','flowMedian','flowLimit','upperFlow','lowerFlow','depthRatio','parallaxFactor','confidence','rawConfidence','safetyFactor','safetyFlags','dx','dy','roll','logScale','modelScore','coherentTracks','backgroundTracks','lowMotionTracks','translationGate','jobsReceived','jobsCompleted','jobsErrored'];
     const out={};for(const k of keys)if(p[k]!==undefined)out[k]=p[k];
     out.frame=Number.isFinite(p.frame)?p.frame:p.frameIndex;
     out.engineAverageConfidence=d.averageConfidence||0;
@@ -124,12 +125,13 @@
     const mean=k=>{const v=arr.map(x=>x[k]).filter(Number.isFinite);return v.length?v.reduce((a,b)=>a+b,0)/v.length:0;};
     const models={};for(const p of arr){const k=p.modelKind||p.source||'unknown';models[k]=(models[k]||0)+1;}
     const bad=arr.filter(p=>p.source!=='ransac'||(p.confidence||0)<.45||(p.coverage||0)<.20).map(p=>p.frame).filter(Number.isFinite);
+    const guarded=arr.filter(p=>(p.safetyFactor??1)<.95);
     const frames=new Set(arr.map(p=>p.frame).filter(Number.isFinite));
     const missing=[];for(let i=0;i<expected;i++)if(!frames.has(i))missing.push(i);
     const conf=arr.map(p=>p.confidence),rep=arr.map(p=>p.reprojection),ms=arr.map(p=>p.ms),para=arr.map(p=>pf(p));
     return{
       count:arr.length,expectedPairs:expected,complete:missing.length===0,missingFrames:missing,
-      avgConfidence:mean('confidence'),p10Confidence:quantile(conf,.10),
+      avgConfidence:mean('confidence'),p10Confidence:quantile(conf,.10),avgRawConfidence:mean('rawConfidence'),
       avgLK:mean('lkRatio'),avgFB:mean('fbRatio'),avgDomainInlier:mean('domainInlierRatio'),
       avgReprojection:mean('reprojection'),p90Reprojection:quantile(rep,.90),
       avgWorkerMs:mean('ms'),p90WorkerMs:quantile(ms,.90),
@@ -137,6 +139,7 @@
       ransacPairs:arr.filter(p=>p.source==='ransac').length,
       rescuePairs:arr.filter(p=>p.rescueUsed).length,
       translationRescuePairs:arr.filter(p=>String(p.modelKind||'').startsWith('translation')).length,
+      safetyGuardPairs:guarded.length,safetyGuardFrames:guarded.map(p=>p.frame).filter(Number.isFinite),
       parallaxPairs:arr.filter(p=>pf(p)>1.45).length,
       weakPairs:bad.length,weakFrames:bad,models,
       realWorkerJobs:tapStats.realWorkerJobs,workerCacheHits:tapStats.cacheHits,workerResults:tapStats.results,workerErrors:tapStats.errors
@@ -185,14 +188,14 @@
     $('jdLine0').textContent=`Worker ${d.workerReady?'Ready':d.worker||'—'} / jsfeat / Jobs ${jobs} / real ${tapStats.realWorkerJobs} cache ${tapStats.cacheHits}`;
     $('jdLine1').textContent=`Frame ${p?`${p.frame+1}→${p.frame+2}`:'—'} / ${p?.source||'—'} / ${p?.modelKind||'—'} / ${Number.isFinite(p?.ms)?`${p.ms.toFixed(1)}ms`:'—'} / ${p?.reason||'—'}`;
     $('jdLine2').textContent=`Pts ${p?.detected??'—'}→${p?.corners??'—'} / LK ${p?.lk??'—'} (${pct(p?.lkRatio)}) → FB ${p?.fb??'—'} (${pct(p?.fbRatio)}) / gate ${px(p?.fbThreshold)}`;
-    $('jdLine3').textContent=`RS ${p?.domainInliers??p?.inliers??0}/${p?.domainTracks??p?.fb??0} (${pct(p?.domainInlierRatio??p?.inlierRatio)}) / global ${pct(p?.inlierRatio)} / Cov ${pct(p?.coverage)} / Err ${px(p?.reprojection)}`;
-    $('jdLine4').textContent=`Flow 上/下 ${px(p?.upperFlow)} / ${px(p?.lowerFlow)} (${Number.isFinite(pf(p))?pf(p).toFixed(2):'—'}x) / Avg ${pct(d.averageConfidence||0)}`;
-    const sm=summary();$('jdLine5').textContent=`Log ${sm.count}/${sm.expectedPairs} / RS ${sm.count?Math.round(sm.ransacPairs/sm.count*100):0}% / Rescue ${sm.rescuePairs||0} / 弱 ${sm.weakPairs||0}`;
+    $('jdLine3').textContent=`RS ${p?.domainInliers??p?.inliers??0}/${p?.domainTracks??p?.fb??0} (${pct(p?.domainInlierRatio??p?.inlierRatio)}) / global ${pct(p?.inlierRatio)} / Cov ${pct(p?.coverage)} / Safe ${pct(p?.safetyFactor??1)}`;
+    $('jdLine4').textContent=`Flow 上/下 ${px(p?.upperFlow)} / ${px(p?.lowerFlow)} (${Number.isFinite(pf(p))?pf(p).toFixed(2):'—'}x) / Err ${px(p?.reprojection)} / Avg ${pct(d.averageConfidence||0)}`;
+    const sm=summary();$('jdLine5').textContent=`Log ${sm.count}/${sm.expectedPairs} / RS ${sm.count?Math.round(sm.ransacPairs/sm.count*100):0}% / Guard ${sm.safetyGuardPairs||0} / 弱 ${sm.weakPairs||0}`;
   }
 
   try{const saved=JSON.parse(localStorage.getItem('streetview:lastDiagnosticLog')||'null');if(saved?.pairs?.length)window.__journeyPreviousSessionLog=saved;}catch{}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else setTimeout(install,0);
-  if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=0.1.24').catch(()=>{});
+  if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=0.1.25').catch(()=>{});
   setInterval(render,250);
-  console.info('Streetview Journey diagnostics v0.1.24');
+  console.info('Streetview Journey diagnostics v0.1.25');
 })();

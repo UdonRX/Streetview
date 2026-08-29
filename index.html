@@ -9,10 +9,10 @@
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css?v=0.1.6" />
-  <title>Streetview Journey v0.1.24 Deterministic Rescue</title>
+  <title>Streetview Journey v0.1.25 Worst-pair Safety</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.24 Phase 1.3.4 Deterministic Rescue + Lossless Log -->
+  <!-- Streetview Journey v0.1.25 Phase 1.3.5 Worst-pair Safety Gate -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
@@ -28,10 +28,10 @@
     </section>
     <section id="startPanel" class="start-panel">
       <div class="start-card">
-        <p class="eyebrow">v0.1.24 PHASE 1.3.4 DETERMINISTIC RESCUE</p>
-        <h1>0.08秒のまま、弱い区間を取りこぼさない。</h1>
-        <p class="lead">Similarityが成立しない区間をForward再評価＋Translation救済で補い、同じJourneyの解析結果は再利用。全71ペアを取りこぼさず記録する。</p>
-        <div class="preset-card"><span class="preset-title">Phase 1.3.4 Deterministic Motion Rescue</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
+        <p class="eyebrow">v0.1.25 PHASE 1.3.5 WORST-PAIR SAFETY</p>
+        <h1>0.08秒のまま、最悪フレームだけ安全側へ逃がす。</h1>
+        <p class="lead">RANSACは維持しつつ、Coverage・Global Inlier・再投影誤差・強視差をSafety Gateで再評価。危険な推定だけBlend/Far-fieldへ逃がす。</p>
+        <div class="preset-card"><span class="preset-title">Phase 1.3.5 Worst-pair Safety Gate</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
         <details class="custom-route">
           <summary>緯度・経度から探す</summary>
           <div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label><label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label></div>
@@ -43,7 +43,7 @@
     </section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
-  <script src="/diagnostics.js?v=0.1.24" defer></script>
-  <script src="/app.js?v=0.1.24" defer></script>
+  <script src="/diagnostics.js?v=0.1.25" defer></script>
+  <script src="/app.js?v=0.1.25" defer></script>
 </body>
 </html>
