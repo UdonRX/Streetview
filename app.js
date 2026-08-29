@@ -1,332 +1,70 @@
-/* Streetview Journey v0.1.4 Smooth Motion
- * 0.5s pseudo-video playback with direction lock, match-cut alignment and micro motion blur.
- */
+/* Streetview Journey v0.1.5 Motion Lab */
 (() => {
-  const VERSION = '0.1.4';
-  const FRAME_INTERVAL_MS = 500;
-  const CROSSFADE_MS = 80;
-  const ALIGN_RELEASE_MS = 135;
-  const PRELOAD_AHEAD = 4;
-  const BLUR_PX = 1.35;
-  const BASE_SCALE = 1.008;
-  const FORWARD_SCALE = 1.032;
-
-  const $ = (id) => document.getElementById(id);
-  const ui = {
-    layerA: $('layerA'), layerB: $('layerB'), motionBlur: document.querySelector('.motion-blur'),
-    startPanel: $('startPanel'), errorPanel: $('errorPanel'), startButton: $('startButton'),
-    retryButton: $('retryButton'), errorMessage: $('errorMessage'), progressBar: $('progressBar'),
-    frameLabel: $('frameLabel'), placeLabel: $('placeLabel'), headingLabel: $('headingLabel'),
-    coordLabel: $('coordLabel'), networkLabel: $('networkLabel'), latInput: $('latInput'),
-    lngInput: $('lngInput'), useCoordinates: $('useCoordinates')
+  const VERSION='0.1.5', BASE='brightness(.9) contrast(1.08) saturate(.94)';
+  const MODES={
+    street:{key:'street',label:'A Street View Step',interval:400,pre:70,cut:30,settle:85,blur:1.8,scale:1.008,peak:1.072},
+    drive:{key:'drive',label:'B Drive Flow',interval:100,flow:82,blur:.55,scale:1.008}
   };
+  const $=id=>document.getElementById(id), sleep=ms=>new Promise(r=>setTimeout(r,ms)), clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const rad=d=>d*Math.PI/180, deg=r=>r*180/Math.PI;
 
-  let route = [];
-  let activeLayer = ui.layerA;
-  let standbyLayer = ui.layerB;
-  let wakeLock = null;
-  let playbackToken = 0;
-
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-  const toRad = (deg) => deg * Math.PI / 180;
-  const toDeg = (rad) => rad * 180 / Math.PI;
-
-  function shortestAngleDelta(from, to) {
-    if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
-    return ((to - from + 540) % 360) - 180;
-  }
-
-  function hasCoords(frame) {
-    return Number.isFinite(frame?.lat) && Number.isFinite(frame?.lng);
-  }
-
-  function distanceMeters(a, b) {
-    if (!hasCoords(a) || !hasCoords(b)) return Infinity;
-    const lat1 = toRad(a.lat);
-    const lat2 = toRad(b.lat);
-    const dLat = lat2 - lat1;
-    const dLng = toRad(b.lng - a.lng);
-    const s = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-    return 6371000 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(Math.max(0, 1 - s)));
-  }
-
-  function bearingBetween(a, b) {
-    if (!hasCoords(a) || !hasCoords(b)) return null;
-    const lat1 = toRad(a.lat);
-    const lat2 = toRad(b.lat);
-    const dLng = toRad(b.lng - a.lng);
-    const y = Math.sin(dLng) * Math.cos(lat2);
-    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
-    const bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
-    return Number.isFinite(bearing) ? bearing : null;
-  }
-
-  function routeBearingAt(index) {
-    const current = route[index];
-    if (!current) return null;
-
-    for (let step = 1; step <= 8 && index + step < route.length; step += 1) {
-      const next = route[index + step];
-      if (distanceMeters(current, next) >= 1.2) return bearingBetween(current, next);
+  function installUI(){
+    const viewer=$('viewer'), card=document.querySelector('.start-card');
+    if(viewer&&!$('flowCanvas')){const c=document.createElement('canvas');c.id='flowCanvas';c.className='flow-canvas';viewer.querySelector('#layerB')?.insertAdjacentElement('afterend',c);}
+    if(card&&!document.querySelector('.mode-grid')){
+      card.querySelector('.eyebrow').textContent='v0.1.5 MOTION LAB';
+      card.querySelector('h1').textContent='2つの動き方を比較。';
+      card.querySelector('.lead').textContent='Aは一歩ずつ進むStreet View風。Bは0.1秒間隔で流れるドライブ風。どちらが「写真」ではなく「移動」に見えるか比較するテスト版。';
+      const d=document.createElement('div');d.className='mode-grid';d.innerHTML='<label class="mode-card"><input type="radio" name="motionMode" value="street" checked><span><b>A</b><strong>ストリートビュー風</strong><small>0.4秒・Pixel/Geo Align・Step Zoom</small></span></label><label class="mode-card"><input type="radio" name="motionMode" value="drive"><span><b>B</b><strong>自転車・ドライブ風</strong><small>0.1秒・微ブラー・Flow-Lite</small></span></label>';card.querySelector('.preset-card')?.insertAdjacentElement('beforebegin',d);
     }
-
-    for (let step = 1; step <= 8 && index - step >= 0; step += 1) {
-      const prev = route[index - step];
-      if (distanceMeters(prev, current) >= 1.2) return bearingBetween(prev, current);
-    }
-
-    return Number.isFinite(current.heading) ? current.heading : null;
+    if(!$('motionLabStyles')){const s=document.createElement('style');s.id='motionLabStyles';s.textContent='.flow-canvas{position:absolute;z-index:2;inset:-3%;width:106%;height:106%;opacity:0;pointer-events:none;filter:'+BASE+' blur(.55px)}.scene-layer{z-index:1}.vignette,.motion-blur{z-index:3}.top-hud,.bottom-hud{z-index:4}.motion-blur.street{opacity:.22!important;backdrop-filter:blur(1.1px);-webkit-backdrop-filter:blur(1.1px);mask-image:radial-gradient(circle,transparent 0 25%,#000 88%);-webkit-mask-image:radial-gradient(circle,transparent 0 25%,#000 88%)}.motion-blur.drive{opacity:.12!important;backdrop-filter:blur(.7px);-webkit-backdrop-filter:blur(.7px);mask-image:radial-gradient(circle,transparent 0 30%,#000 92%);-webkit-mask-image:radial-gradient(circle,transparent 0 30%,#000 92%)}.mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 10px}.mode-card{position:relative}.mode-card input{position:absolute;opacity:0}.mode-card>span{min-height:106px;padding:11px;border:1px solid rgba(255,255,255,.11);border-radius:14px;background:rgba(255,255,255,.04);display:grid;align-content:start;gap:6px}.mode-card input:checked+span{border-color:rgba(255,255,255,.55);background:rgba(255,255,255,.11)}.mode-card b{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#fff;color:#05070a;font-size:10px}.mode-card strong{font-size:12px}.mode-card small{font-size:9px;line-height:1.35;color:rgba(255,255,255,.52)}.start-panel{overflow-y:auto}';document.head.appendChild(s);}
   }
+  installUI();
 
-  function isSphereFrame(frame) {
-    const fov = Number.isFinite(frame?.fieldOfView) ? frame.fieldOfView : null;
-    return String(frame?.projection || '').toUpperCase() === 'SPHERE' || (fov && fov >= 180);
-  }
+  const ui={viewer:$('viewer'),a:$('layerA'),b:$('layerB'),canvas:$('flowCanvas'),blur:document.querySelector('.motion-blur'),start:$('startPanel'),error:$('errorPanel'),startBtn:$('startButton'),retry:$('retryButton'),err:$('errorMessage'),bar:$('progressBar'),num:$('frameLabel'),place:$('placeLabel'),heading:$('headingLabel'),coord:$('coordLabel'),net:$('networkLabel'),lat:$('latInput'),lng:$('lngInput'),coords:$('useCoordinates')};
+  let route=[],active=ui.a,standby=ui.b,wake=null,token=0,mode=MODES.street,ctx=null,pixelOK=false;
+  const alignCache=new Map();
 
-  function viewAnchorX(index) {
-    const frame = route[index];
-    if (!frame) return 50;
-    const travelBearing = routeBearingAt(index);
-    const imageHeading = Number.isFinite(frame.heading)
-      ? frame.heading
-      : (Number.isFinite(frame.projectionYaw) ? frame.projectionYaw : null);
-    if (!Number.isFinite(travelBearing) || !Number.isFinite(imageHeading)) return 50;
+  function angle(a,b){return !Number.isFinite(a)||!Number.isFinite(b)?0:((b-a+540)%360)-180;}
+  function has(f){return Number.isFinite(f?.lat)&&Number.isFinite(f?.lng);}
+  function dist(a,b){if(!has(a)||!has(b))return Infinity;const p1=rad(a.lat),p2=rad(b.lat),dp=p2-p1,dl=rad(b.lng-a.lng),s=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 12742000*Math.atan2(Math.sqrt(s),Math.sqrt(Math.max(0,1-s)));}
+  function bearing(a,b){if(!has(a)||!has(b))return null;const p1=rad(a.lat),p2=rad(b.lat),dl=rad(b.lng-a.lng),y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(deg(Math.atan2(y,x))+360)%360;}
+  function travel(i){const c=route[i];if(!c)return null;let x=0,y=0,w=0;for(let s=1;s<=10&&i+s<route.length;s++){const n=route[i+s],d=dist(c,n);if(!Number.isFinite(d)||d<1)continue;const b=bearing(c,n),q=Math.min(d,14)/Math.sqrt(s);x+=Math.cos(rad(b))*q;y+=Math.sin(rad(b))*q;w+=q;if(d>=18)break;}if(w)return(deg(Math.atan2(y,x))+360)%360;return Number.isFinite(c.heading)?c.heading:null;}
+  function sphere(f){return String(f?.projection||'').toUpperCase()==='SPHERE'||(Number.isFinite(f?.fieldOfView)&&f.fieldOfView>=180);}
+  function anchor(i){const f=route[i];if(!f)return 50;const t=travel(i),h=Number.isFinite(f.heading)?f.heading:f.projectionYaw;if(!Number.isFinite(t)||!Number.isFinite(h))return 50;const d=angle(h,t);if(sphere(f))return clamp(50+d/3.6,0,100);return clamp(50+d/clamp(f.fieldOfView||100,45,170)*100,5,95);}
+  function geo(i){let ad=anchor(i)-anchor(i+1);if(sphere(route[i])||sphere(route[i+1])){if(ad>50)ad-=100;if(ad<-50)ad+=100;}const vw=window.innerWidth||390,turn=angle(travel(i),travel(i+1)),d=dist(route[i],route[i+1]);return{x:clamp(ad/100*vw*.18-turn*.22,-18,18),y:0,scale:clamp(1-clamp(Number.isFinite(d)?d:2,0,12)*.0012,.987,1),source:'geo'};}
 
-    const delta = shortestAngleDelta(imageHeading, travelBearing);
-    const fov = Number.isFinite(frame.fieldOfView) ? frame.fieldOfView : null;
+  function cover(c,img,ax,x=0,y=0,scale=1,alpha=1){if(!img?.naturalWidth)return;const cw=c.canvas.width,ch=c.canvas.height,r=Math.max(cw/img.naturalWidth,ch/img.naturalHeight)*scale,dw=img.naturalWidth*r,dh=img.naturalHeight*r;c.globalAlpha=alpha;c.drawImage(img,(cw-dw)*ax/100+x,(ch-dh)/2+y,dw,dh);}
+  function loadCors(url){return new Promise(r=>{const im=new Image();im.crossOrigin='anonymous';im.referrerPolicy='no-referrer';im.onload=()=>r(im);im.onerror=()=>r(null);im.src=url;});}
+  function gray(im,i){const c=document.createElement('canvas');c.width=48;c.height=84;const x=c.getContext('2d',{willReadFrequently:true});cover(x,im,anchor(i));const p=x.getImageData(0,0,48,84).data,a=new Float32Array(4032);let mean=0;for(let k=0,j=0;k<a.length;k++,j+=4){a[k]=p[j]*.299+p[j+1]*.587+p[j+2]*.114;mean+=a[k];}mean/=a.length;for(let k=0;k<a.length;k++)a[k]-=mean;return a;}
+  function shiftScore(a,b,dx,dy){let sc=0,n=0;for(let y=14;y<70;y+=2)for(let x=8;x<40;x+=2){const bx=x+dx,by=y+dy;if(bx<1||bx>46||by<1||by>82)continue;sc+=Math.abs(a[y*48+x]-b[by*48+bx]);n++;}return n?sc/n:1e9;}
+  async function pixel(i){try{const [ia,ib]=await Promise.all([loadCors(route[i].url),loadCors(route[i+1].url)]);if(!ia||!ib)return null;const a=gray(ia,i),b=gray(ib,i+1),base=shiftScore(a,b,0,0);let best={dx:0,dy:0,s:base};for(let dy=-4;dy<=4;dy++)for(let dx=-6;dx<=6;dx++){const s=shiftScore(a,b,dx,dy);if(s<best.s)best={dx,dy,s};}if((base-best.s)/Math.max(base,1)<.03)return null;pixelOK=true;return{x:clamp(-best.dx*(window.innerWidth||390)/48,-30,30),y:clamp(-best.dy*(window.innerHeight||844)/84,-22,22)};}catch{return null;}}
+  function requestAlign(i){if(!alignCache.has(i))alignCache.set(i,pixel(i));return alignCache.get(i);}
+  async function alignment(i,wait=false){const g=geo(i);let p=null;if(wait)p=await Promise.race([requestAlign(i),sleep(45).then(()=>null)]);else if(alignCache.has(i))p=await Promise.race([alignCache.get(i),Promise.resolve(null)]);if(!p)return g;return{x:clamp(p.x+g.x*.2,-32,32),y:p.y,scale:g.scale,source:'pixel'};}
+  function warm(i){for(let k=i;k<Math.min(route.length-1,i+5);k++)requestAlign(k);}
 
-    if (isSphereFrame(frame)) return clamp(50 + (delta / 360) * 100, 0, 100);
+  function filter(el,b=0){el.style.filter=`${BASE} blur(${b}px)`;}
+  function view(el,i,scale=1.008,x=0,y=0){el.style.objectPosition=`${anchor(i).toFixed(2)}% 50%`;el.style.transform=`scale(${scale}) translate3d(${x.toFixed(2)}px,${y.toFixed(2)}px,0)`;}
+  function blur(kind,on){ui.blur?.classList.toggle('street',kind==='street'&&on);ui.blur?.classList.toggle('drive',kind==='drive'&&on);}
+  function preload(i){for(let n=1;n<=(mode.key==='drive'?10:6);n++){const f=route[i+n];if(f){const im=new Image();im.decoding='async';im.src=f.url;}}}
+  function waitImg(el,src){return new Promise((r,j)=>{if(el.src===src&&el.complete&&el.naturalWidth)return r();el.onload=r;el.onerror=()=>j(new Error('画像を読み込めませんでした'));el.src=src;});}
+  function hud(i,f,src){ui.num.textContent=`${i+1} / ${route.length}`;ui.bar.style.width=`${(i+1)/route.length*100}%`;const t=travel(i);ui.heading.textContent=Number.isFinite(t)?`${Math.round(t)}°`:'—°';ui.coord.textContent=has(f)?`${f.lat.toFixed(5)}, ${f.lng.toFixed(5)}`:'—';ui.net.textContent=mode.key==='street'?`A・0.4秒・${src==='pixel'||pixelOK?'Pixel Align':'Geo Align'}`:'B・0.1秒・Flow-Lite';}
 
-    const horizontalFov = clamp(fov || 100, 45, 170);
-    return clamp(50 + (delta / horizontalFov) * 100, 5, 95);
-  }
+  async function first(f){active.style.transition='none';active.style.opacity=0;await waitImg(active,f.url);view(active,0,mode.scale);filter(active,mode.blur||0);active.style.opacity=1;standby.style.opacity=0;ui.canvas.style.opacity=0;}
+  async function stepA(f,i){await waitImg(standby,f.url);const al=await alignment(i,true);standby.style.transition='none';standby.style.opacity=0;view(standby,i+1,al.scale,al.x,al.y);filter(standby,mode.blur*.85);active.style.transition=`transform ${mode.pre}ms cubic-bezier(.7,0,.95,.4),filter ${mode.pre}ms ease-in`;active.style.transform=`scale(${mode.peak})`;filter(active,mode.blur);blur('street',true);await sleep(mode.pre);active.style.transition=`opacity ${mode.cut}ms linear`;standby.style.transition=`opacity ${mode.cut}ms linear`;hud(i+1,f,al.source);active.style.opacity=0;standby.style.opacity=1;await sleep(mode.cut);[active,standby]=[standby,active];active.style.transition=`transform ${mode.settle}ms cubic-bezier(.18,.82,.22,1),filter ${mode.settle}ms ease-out`;active.style.transform=`scale(${mode.scale}) translate3d(0,0,0)`;filter(active,0);await sleep(mode.settle);blur('street',false);standby.style.opacity=0;}
 
-  function anchorDeltaPercent(fromIndex, toIndex) {
-    let delta = viewAnchorX(fromIndex) - viewAnchorX(toIndex);
-    if (isSphereFrame(route[fromIndex]) || isSphereFrame(route[toIndex])) {
-      if (delta > 50) delta -= 100;
-      if (delta < -50) delta += 100;
-    }
-    return delta;
-  }
+  function sizeCanvas(){const d=Math.min(devicePixelRatio||1,1.25),w=Math.round((innerWidth||390)*1.06*d),h=Math.round((innerHeight||844)*1.06*d);if(ui.canvas.width!==w||ui.canvas.height!==h){ui.canvas.width=w;ui.canvas.height=h;}ctx=ui.canvas.getContext('2d',{alpha:false});return d;}
+  function flowFrame(i,al,t){const d=sizeCanvas(),x=al.x*d,y=al.y*d;ctx.fillStyle='#05070a';ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);cover(ctx,active,anchor(i),-x*t*.35,-y*t*.35,1,1-t);cover(ctx,standby,anchor(i+1),x*(1-t),y*(1-t),1,t);}
+  function animateFlow(i,al){return new Promise(r=>{ui.canvas.style.opacity=1;blur('drive',true);const st=performance.now();function tick(now){const t=clamp((now-st)/mode.flow,0,1),e=t*t*(3-2*t);flowFrame(i,al,e);t<1?requestAnimationFrame(tick):r();}requestAnimationFrame(tick);});}
+  async function stepB(f,i){await waitImg(standby,f.url);const al=await alignment(i,false);standby.style.transition='none';standby.style.opacity=0;view(standby,i+1,mode.scale);filter(standby,mode.blur);await animateFlow(i,al);hud(i+1,f,al.source);standby.style.opacity=1;active.style.opacity=0;ui.canvas.style.opacity=0;[active,standby]=[standby,active];standby.style.opacity=0;filter(active,mode.blur);}
 
-  function alignmentFor(currentIndex, nextIndex) {
-    const current = route[currentIndex];
-    const next = route[nextIndex];
-    const currentBearing = routeBearingAt(currentIndex);
-    const nextBearing = routeBearingAt(nextIndex);
-    const turnDelta = shortestAngleDelta(currentBearing, nextBearing);
-    const anchorDelta = anchorDeltaPercent(currentIndex, nextIndex);
-    const viewportWidth = Math.max(320, window.innerWidth || 390);
+  async function play(frames){const t=++token;route=frames;alignCache.clear();pixelOK=false;if(!route.length)throw new Error('再生できる画像がありません');ui.place.textContent=route[0].sequenceId?`Sequence #${route[0].sequenceId}`:'KartaView route';hud(0,route[0]);preload(0);warm(0);if(mode.key==='street')await Promise.race([Promise.all([requestAlign(0),requestAlign(1)]),sleep(220)]);blur('drive',mode.key==='drive');await first(route[0]);let next=performance.now()+mode.interval;for(let i=0;i<route.length-1&&t===token;i++){await waitImg(standby,route[i+1].url);const rem=next-performance.now();if(rem>0)await sleep(rem);if(t!==token)return;mode.key==='street'?await stepA(route[i+1],i):await stepB(route[i+1],i);preload(i+1);warm(i+1);next+=mode.interval;if(next<performance.now())next=performance.now()+Math.max(10,mode.interval*.18);}if(t===token){ui.net.textContent=`${mode.label}・再スタート`;await sleep(mode.key==='drive'?500:900);if(t===token)play(frames);}}
 
-    const anchorShift = (anchorDelta / 100) * viewportWidth * 0.22;
-    const turnShift = -turnDelta * 0.28;
-    const shiftX = clamp(anchorShift + turnShift, -20, 20);
-
-    const distance = distanceMeters(current, next);
-    const moved = Number.isFinite(distance) ? clamp(distance, 0, 12) : 2;
-    const matchScale = clamp(1 - moved * 0.0017, 0.984, 1.0);
-
-    return { shiftX, matchScale };
-  }
-
-  function setFrameView(layer, index, scale = BASE_SCALE, shiftX = 0) {
-    layer.style.objectPosition = `${viewAnchorX(index).toFixed(2)}% 50%`;
-    layer.style.transform = `scale(${scale}) translate3d(${shiftX.toFixed(2)}px,0,0)`;
-  }
-
-  function setBlur(layer, px) {
-    layer.style.filter = `brightness(.9) contrast(1.08) saturate(.94) blur(${px}px)`;
-  }
-
-  function pulseMotionBlur(on) {
-    if (!ui.motionBlur) return;
-    ui.motionBlur.classList.toggle('is-active', on);
-  }
-
-  async function requestWakeLock() {
-    if (!('wakeLock' in navigator)) return;
-    try { wakeLock = await navigator.wakeLock.request('screen'); } catch (_) { }
-  }
-
-  async function refreshWakeLock() {
-    if (document.visibilityState === 'visible' && (!wakeLock || wakeLock.released)) await requestWakeLock();
-  }
-
-  function preload(frame) {
-    if (!frame?.url) return;
-    const img = new Image();
-    img.decoding = 'async';
-    img.src = frame.url;
-  }
-
-  function preloadAhead(index) {
-    for (let offset = 1; offset <= PRELOAD_AHEAD; offset += 1) preload(route[index + offset]);
-  }
-
-  function waitForImage(img, src) {
-    return new Promise((resolve, reject) => {
-      if (img.src === src && img.complete && img.naturalWidth > 0) return resolve();
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('画像を読み込めませんでした'));
-      img.src = src;
-    });
-  }
-
-  function updateHud(index, frame) {
-    const total = route.length;
-    ui.frameLabel.textContent = `${index + 1} / ${total}`;
-    ui.progressBar.style.width = `${((index + 1) / total) * 100}%`;
-    const travelBearing = routeBearingAt(index);
-    ui.headingLabel.textContent = Number.isFinite(travelBearing) ? `${Math.round(travelBearing)}°` : '—°';
-    ui.coordLabel.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-  }
-
-  async function showFirstFrame(frame) {
-    activeLayer.style.transition = 'none';
-    activeLayer.style.opacity = '0';
-    setBlur(activeLayer, 0);
-    await waitForImage(activeLayer, frame.url);
-    setFrameView(activeLayer, 0, BASE_SCALE, 0);
-    void activeLayer.offsetWidth;
-    activeLayer.style.transition = 'opacity 120ms linear, transform 500ms linear';
-    activeLayer.style.opacity = '1';
-    activeLayer.style.transform = `scale(${FORWARD_SCALE}) translate3d(0,0,0)`;
-    await sleep(130);
-  }
-
-  async function morphTo(nextFrame, currentIndex, nextIndex) {
-    await waitForImage(standbyLayer, nextFrame.url);
-    const alignment = alignmentFor(currentIndex, nextIndex);
-
-    standbyLayer.style.transition = 'none';
-    standbyLayer.style.opacity = '0';
-    setBlur(standbyLayer, BLUR_PX);
-    setFrameView(standbyLayer, nextIndex, alignment.matchScale, alignment.shiftX);
-
-    activeLayer.style.transition = 'filter 35ms linear';
-    setBlur(activeLayer, BLUR_PX * 0.72);
-    pulseMotionBlur(true);
-    await sleep(28);
-
-    void standbyLayer.offsetWidth;
-    activeLayer.style.transition = `opacity ${CROSSFADE_MS}ms linear, transform ${ALIGN_RELEASE_MS}ms ease-out, filter ${CROSSFADE_MS}ms linear`;
-    standbyLayer.style.transition = `opacity ${CROSSFADE_MS}ms linear, transform ${ALIGN_RELEASE_MS}ms cubic-bezier(.22,.72,.26,1), filter ${ALIGN_RELEASE_MS}ms ease-out`;
-
-    updateHud(nextIndex, nextFrame);
-    activeLayer.style.opacity = '0';
-    activeLayer.style.transform = `scale(${(FORWARD_SCALE + 0.006).toFixed(3)}) translate3d(${(-alignment.shiftX * 0.2).toFixed(2)}px,0,0)`;
-    setBlur(activeLayer, BLUR_PX);
-
-    standbyLayer.style.opacity = '1';
-    standbyLayer.style.transform = `scale(${BASE_SCALE}) translate3d(0,0,0)`;
-    setBlur(standbyLayer, 0);
-
-    await sleep(ALIGN_RELEASE_MS + 8);
-    pulseMotionBlur(false);
-
-    const old = activeLayer;
-    activeLayer = standbyLayer;
-    standbyLayer = old;
-
-    activeLayer.style.transition = `transform ${Math.max(220, FRAME_INTERVAL_MS - ALIGN_RELEASE_MS)}ms linear, filter 45ms linear`;
-    activeLayer.style.transform = `scale(${FORWARD_SCALE}) translate3d(0,0,0)`;
-    setBlur(activeLayer, 0);
-  }
-
-  async function play(frames) {
-    const token = ++playbackToken;
-    route = frames;
-    if (!route.length) throw new Error('再生できる画像がありません');
-
-    ui.placeLabel.textContent = route[0].sequenceId ? `Sequence #${route[0].sequenceId}` : 'KartaView route';
-    updateHud(0, route[0]);
-    preloadAhead(0);
-    await showFirstFrame(route[0]);
-
-    let nextChangeAt = performance.now() + FRAME_INTERVAL_MS;
-
-    for (let i = 1; i < route.length && token === playbackToken; i += 1) {
-      const nextFrame = route[i];
-      await waitForImage(standbyLayer, nextFrame.url);
-      if (token !== playbackToken) return;
-
-      const remaining = nextChangeAt - performance.now();
-      if (remaining > 0) await sleep(remaining);
-      if (token !== playbackToken) return;
-
-      await morphTo(nextFrame, i - 1, i);
-      preloadAhead(i);
-
-      nextChangeAt += FRAME_INTERVAL_MS;
-      if (nextChangeAt < performance.now()) nextChangeAt = performance.now() + Math.max(80, FRAME_INTERVAL_MS - ALIGN_RELEASE_MS);
-    }
-
-    if (token === playbackToken && route.length > 2) {
-      ui.networkLabel.textContent = 'ルート完了・再スタート';
-      await sleep(1200);
-      if (token === playbackToken) await play(frames);
-    }
-  }
-
-  async function fetchRoute() {
-    const useCoordinates = ui.useCoordinates.checked;
-    const params = new URLSearchParams({ source: 'karta' });
-    if (useCoordinates) {
-      const lat = Number(ui.latInput.value);
-      const lng = Number(ui.lngInput.value);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('緯度・経度を確認してください');
-      params.set('lat', String(lat));
-      params.set('lng', String(lng));
-      params.set('radius', '1200');
-    } else {
-      params.set('sequence', '6187609');
-      params.set('index', '650');
-    }
-
-    const response = await fetch(`/api/imagery?${params.toString()}`, { cache: 'no-store' });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `API error ${response.status}`);
-    if (!Array.isArray(data.frames) || data.frames.length < 2) throw new Error('連続して再生できる写真が見つかりませんでした');
-    return data;
-  }
-
-  async function startJourney() {
-    ui.startButton.disabled = true;
-    ui.startButton.textContent = 'ルートを準備中…';
-    ui.errorPanel.hidden = true;
-    try {
-      await requestWakeLock();
-      const data = await fetchRoute();
-      ui.networkLabel.textContent = `0.5秒・Smooth Motion・${data.frames.length}枚`;
-      ui.startPanel.hidden = true;
-      await play(data.frames);
-    } catch (error) {
-      pulseMotionBlur(false);
-      ui.errorMessage.textContent = error?.message || '不明なエラーが発生しました';
-      ui.errorPanel.hidden = false;
-      ui.startPanel.hidden = true;
-    } finally {
-      ui.startButton.disabled = false;
-      ui.startButton.textContent = '旅をはじめる';
-    }
-  }
-
-  function resetToStart() {
-    playbackToken += 1;
-    pulseMotionBlur(false);
-    ui.errorPanel.hidden = true;
-    ui.startPanel.hidden = false;
-  }
-
-  ui.startButton.addEventListener('click', startJourney);
-  ui.retryButton.addEventListener('click', resetToStart);
-  document.addEventListener('visibilitychange', refreshWakeLock);
-
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.4').catch(() => {}));
-  }
-
+  async function fetchRoute(){const p=new URLSearchParams({source:'karta'});if(ui.coords.checked){const lat=Number(ui.lat.value),lng=Number(ui.lng.value);if(!Number.isFinite(lat)||!Number.isFinite(lng))throw new Error('緯度・経度を確認してください');p.set('lat',lat);p.set('lng',lng);p.set('radius','1200');}else{p.set('sequence','6187609');p.set('index','650');}const r=await fetch(`/api/imagery?${p}`,{cache:'no-store'}),d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`API error ${r.status}`);if(!Array.isArray(d.frames)||d.frames.length<2)throw new Error('連続して再生できる写真が見つかりませんでした');return d;}
+  async function wakeLock(){if(!('wakeLock'in navigator))return;try{wake=await navigator.wakeLock.request('screen');}catch{}}
+  async function start(){ui.startBtn.disabled=true;ui.startBtn.textContent='ルートを準備中…';ui.error.hidden=true;mode=document.querySelector('input[name="motionMode"]:checked')?.value==='drive'?MODES.drive:MODES.street;try{await wakeLock();const d=await fetchRoute();ui.start.hidden=true;await play(d.frames);}catch(e){blur('street',false);blur('drive',false);ui.canvas.style.opacity=0;ui.err.textContent=e?.message||'不明なエラーが発生しました';ui.error.hidden=false;ui.start.hidden=true;}finally{ui.startBtn.disabled=false;ui.startBtn.textContent='旅をはじめる';}}
+  function reset(){token++;blur('street',false);blur('drive',false);ui.canvas.style.opacity=0;ui.error.hidden=true;ui.start.hidden=false;}
+  ui.startBtn.addEventListener('click',start);ui.retry.addEventListener('click',reset);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&(!wake||wake.released))wakeLock();});
+  if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js?v=0.1.5').catch(()=>{}));
   console.info(`Streetview Journey v${VERSION}`);
 })();
