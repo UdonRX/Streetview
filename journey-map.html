@@ -30,7 +30,7 @@
   </main>
   <script>
   (()=>{
-    const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com',CHUNK=32;
+    const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com',CHUNK=24,MAX_RETRY=2;
     let selected=null;try{selected=JSON.parse(sessionStorage.getItem(KEY)||'null');}catch{}
     const nativeFetch=window.fetch.bind(window);
     window.fetch=(input,init)=>{const url=typeof input==='string'?input:input?.url||'';if(selected&&url.includes('/api/imagery'))return Promise.resolve({ok:true,status:200,json:async()=>selected});return nativeFetch(input,init);};
@@ -39,11 +39,11 @@
     async function api(id){const t=token();if(!t)throw new Error('Mapillary token missing');const r=await nativeFetch(`${GRAPH}/${encodeURIComponent(id)}?fields=id,sequence,captured_at,computed_geometry,compass_angle,thumb_2048_url,is_pano`,{headers:{Authorization:`OAuth ${t}`}}),j=await r.json().catch(()=>({}));if(!r.ok||j?.error)throw new Error(j?.error?.message||String(r.status));return j}
     async function pmap(items,limit,fn){const out=new Array(items.length);let n=0;async function w(){for(;;){const i=n++;if(i>=items.length)return;try{out[i]=await fn(items[i],i)}catch{out[i]=null}}}await Promise.all(Array.from({length:Math.min(limit,items.length||1)},w));return out}
     function frame(m,r){const c=m?.computed_geometry?.coordinates;if(!Array.isArray(c)||c.length<2||!m?.thumb_2048_url)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,url:m.thumb_2048_url,provider:'Mapillary',capturedAt:m.captured_at||null}}
-    async function continueStream(){if(!selected||selected.provider!=='Mapillary'||!Array.isArray(selected.streamPending)||!selected.streamPending.length)return;selected.streamOpen=true;const net=document.getElementById('networkLabel');while(selected.streamPending.length){const refs=selected.streamPending.slice(0,CHUNK),meta=await pmap(refs,16,r=>api(r.id)),frames=meta.map((m,i)=>frame(m,refs[i])).filter(Boolean);selected.streamPending.splice(0,refs.length);selected.frames.push(...frames);if(net)net.textContent=`続きを準備中 ${selected.frames.length}/${selected.frames.length+selected.streamPending.length}`;await new Promise(r=>setTimeout(r,0))}selected.streamOpen=false;try{sessionStorage.setItem(KEY,JSON.stringify(selected))}catch{}}
+    function save(){try{sessionStorage.setItem(KEY,JSON.stringify(selected))}catch{}}
+    function updateStreamingHud(){const net=document.getElementById('networkLabel');if(!net||!selected)return;const done=selected.frames?.length||0,pending=selected.streamPending?.length||0,total=selected.selection?.totalImageIds||done+pending;net.textContent=pending?`続きを準備中 ${done}/${total}`:`準備完了 ${done}/${total}`;const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=pending?`${done}枚準備済み / 全${total}枚予定`:`${done}枚の連続画像`;}
+    async function continueStream(){if(!selected||selected.provider!=='Mapillary'||!Array.isArray(selected.streamPending)||!selected.streamPending.length)return;selected.streamOpen=true;while(selected.streamPending.length){const refs=selected.streamPending.splice(0,CHUNK),meta=await pmap(refs,12,r=>api(r.id)),retry=[];for(let i=0;i<refs.length;i++){const f=meta[i]?frame(meta[i],refs[i]):null;if(f)selected.frames.push(f);else{const r={...refs[i],retry:(refs[i].retry||0)+1};if(r.retry<=MAX_RETRY)retry.push(r)}}if(retry.length)selected.streamPending.push(...retry);updateStreamingHud();save();await new Promise(r=>setTimeout(r,16))}selected.streamOpen=false;updateStreamingHud();save()}
     window.addEventListener('DOMContentLoaded',()=>{
-      const provider=selected?.provider||selected?.source||'Coverage';
-      const count=Array.isArray(selected?.frames)?selected.frames.length:0;
-      const total=count+(selected?.streamPending?.length||0),seq=selected?.sequenceId||'—';
+      const provider=selected?.provider||selected?.source||'Coverage',count=Array.isArray(selected?.frames)?selected.frames.length:0,total=selected?.selection?.totalImageIds||count+(selected?.streamPending?.length||0),seq=selected?.sequenceId||'—';
       const badge=document.getElementById('sourceBadge');if(badge)badge.textContent=provider;
       const name=document.getElementById('selectedRouteName');if(name)name.textContent=`${provider} / ${selected?.sequenceIds?.length>1?selected.sequenceIds.length+' sequences':'Sequence '+seq}`;
       const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=selected?.streamPending?.length?`${count}枚準備済み / 全${total}枚予定`:`${count}枚の連続画像`;
@@ -52,7 +52,7 @@
       if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね';}}
       else if(new URLSearchParams(location.search).get('autostart')==='1')setTimeout(()=>document.getElementById('startButton')?.click(),180);
       const back=document.getElementById('journeyBack');if(back)back.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();location.href='/';},true);
-      continueStream().catch(()=>{selected.streamOpen=false;});
+      continueStream().catch(()=>{if(selected){selected.streamOpen=false;save()}});
     });
   })();
   </script>
