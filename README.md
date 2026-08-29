@@ -1,48 +1,41 @@
 # Streetview Journey
 
-Current version: **v0.1.14 Phase 1 Multi-frame Camera Path Stabilization**
+Current version: **v0.1.15 Phase 1.1 Camera Path Tune**
 
-iPhone Safari/PWA向けJourney Engine。最終目標は、Mapillary / KartaViewに画像が存在する道路・登山道・山・海岸・名所・展望地などを「そこへ向かって進んでいる」ように体験できるアプリ。
+iPhone Safari/PWA向け、Mapillary / KartaViewに画像が存在する道路・登山道・山・海岸・名所・展望地などを「そこへ向かって進んでいる」ように見せる Journey Engine を開発するプロジェクト。
 
-## v0.1.14 Phase 1 — Multi-frame Camera Path Stabilization
-- 0.08秒を今後のJourney Engine標準速度に変更。0.10 / 0.12秒は比較用として残す
-- 完全無料のOpenCV.jsを外部ライブラリとして遅延ロード
-- Shi-Tomasi特徴点 + pyramidal Lucas-Kanade Optical Flowで背景特徴を追跡
-- 追跡点のmedian / MADで局所的な外れ値を除外し、カメラ移動のX/Yを推定
-- 複数特徴点の相対位置から残留rollと微小scaleを推定
-- 前後5フレーム相当（現在±2）のraw trajectoryを平滑化し、Virtual Camera Pathを生成
-- Scene-axisとして既存の遠景ベース水平推定を残し、その後にCamera Path補正を適用
-- OpenCVの追跡信頼度が低い場合は既存Far-field pair matchingへ自動フォールバック
-- Stabilized frameを作った後に既存4×5 Tile Flow → Normalized Blend → Perceptual Bridgeを適用
-- 0.08秒時は60fps相当の描画上限を維持
-- OpenCV失敗時でも旧方式で再生を継続するfail-soft構成
-- `window.__journeyDiagnostics` にOpenCV状態、Camera confidence、補正pose、平均pair時間を公開
+## v0.1.15 Phase 1.1 Camera Path Tune
+- 0.08秒を今後の標準速度として固定。通常UIでは0.08秒だけを表示
+- 比較基盤は残し、URLに `?compare=1` を付けたときだけ 0.08 / 0.10 / 0.12秒を選択可能
+- OpenCV特徴点追跡の閾値をiPhone向けに調整し、利用できる背景特徴点を増加
+- OpenCVが低〜中信頼のときに完全破棄せず、Far-field推定とconfidenceに応じて混合
+- Camera Pathの平滑化を5フレーム相当から7フレーム相当へ拡張
+- X/Y・残留roll・微小scaleをVirtual Camera Pathとして平滑化し、画像切替時の傾き・中心ジャンプを抑制
+- Roll自体も時間方向の追従を弱め、写真単位の左右揺れを抑制
+- 9% Overscanを追加し、Camera Stabilizationで露出する上下左右の黒い画面端を隠す
+- Journey Engine左上に「戻る」を追加し、再読み込みせずTOPへ戻れるようにした
+- HUDに現在confidenceに加えて `Avg` を表示。iPhoneのスクリーンショットだけで平均confidenceを確認可能
+- OpenCVが使えない場面・特徴点が少ない場面ではFar-field + Tile Flowへ自動フォールバック
 - Vercel Functionは `api/imagery.js` 1個のまま
 
-## Phase 1 acceptance criteria
-1. **機能**: 開始画面が `v0.1.14 PHASE 1 CAMERA PATH` で、0.08秒が標準選択になっている。
-2. **OpenCV**: 通常のテクスチャがある区間ではHUDが `CV xx%` を表示する。常時 `Mix` の場合はOpenCVロード/追跡を要確認。
-3. **傾き**: 遠景の建物・水平線・道路奥などを見たとき、写真切替ごとの左右交互の傾きがv0.1.13より目立たない。
-4. **中心安定**: 遠景の同じ対象が写真切替のたびに左右・上下へ跳ねる量が減っている。
-5. **過補正なし**: 画面が周期的にズームイン/アウトしない、黒い端が見えない、景色が引っ張られて大きく回転しない。
-6. **0.08秒維持**: 初期解析後の再生で長い停止が連発せず、v0.1.13の0.08秒の速度感を維持する。
-7. **診断目安**: `window.__journeyDiagnostics.averageConfidence` がテクスチャの多い区間で概ね0.15以上ならCV追跡が実用域。`averagePairMs` が継続的に200msを大きく超える場合は次回Worker/GPU最適化対象。
-8. **フォールバック**: OpenCVが読めない/特徴点が少ない空・海・壁でもJourneyが停止せず再生を継続する。
+## Phase 1.1 判定基準
+- Jakartaデモのような特徴の多い場面では、`Avg` が目安として10〜15%以上に上がること。Mix表示自体は異常ではない
+- 遠景の建物・道路奥・空と建物の境界を注視したとき、v0.1.14より傾きと上下左右のジャンプが明確に減ること
+- 画面上下左右の黒端がほぼ見えないこと
+- 0.08秒の速度感・連続感がv0.1.14から悪化しないこと
+- 周期的なズーム、過度なクロップ、画面全体の漂いが新たに目立たないこと
+- OpenCV低信頼区間でも停止せず、Mix/Far-fieldで再生を継続すること
 
-## v0.1.13 Smooth 80ms
-- 0.05秒を廃止し、実時間80msを導入
-- 0.08秒時は最大60fps相当で補間描画
-- Far-field Lock / Tile Flow / Normalized Blend / Perceptual Bridgeを維持
+## Roadmap
+1. Phase 1: 0.08秒 Camera Stabilization
+2. Phase 2: MapLibre + OpenFreeMap + Mapillary/KartaView実データ地図UI
+3. Phase 3: Overpass + Wikipedia/Wikimediaによる到着地選択
+4. Phase 4: Journey Graph / 出発地 / 距離 / 所要時間 / 出発・到着時刻
+5. Phase 5: Duplicate / Gap / Quality / Adaptive Sampling / Exposure
+6. Phase 6: Depth-aware Forward Flow / Terrain-aware Motion / Elevation
+7. Phase 7: TWGL/WebGL + Worker/Comlink GPU Journey Renderer
+8. Phase 8: Gap / Depth Mesh / Occlusion補完
+9. Phase 9: 道路・登山道・森・山・海岸・展望地・360/Fisheyeの全地形対応
+10. Phase 10: 仮想現在時刻・ETA・移動距離・残距離・到着演出を含むJourney UX
 
-## Planned phases
-- Phase 2: MapLibre + OpenFreeMapで地図UI、Mapillary Vector Tiles / KartaView Coverageの実データ表示
-- Phase 3: Overpass + Wikipedia/Wikimediaで山・観光地・展望地などの到着地UI
-- Phase 4: Mapillary/KartaView共通Journey Graph、出発地、距離、所要時間、出発/到着予定時刻
-- Phase 5: Duplicate/Gap Detection、Quality Score、Adaptive Sampling、距離正規化、色/露出安定化
-- Phase 6: Depth Anything V2 SmallでDepth-aware Forward Flow、地形別Motion、標高/pitch
-- Phase 7: TWGL/WebGL + Worker/ComlinkでGPUレンダリングとバックグラウンド解析
-- Phase 8: Gap専用Bridge、Depth Mesh中間視点、Occlusion処理
-- Phase 9: 道路・登山道・森・山・海岸・展望地・名所・360/Fisheyeの全地形Scene Model
-- Phase 10: 仮想現在時刻、到着予定、移動済/残距離、到着演出を含むJourney UX完成
-
-> バージョンごとにファイルを増やさず、既存ファイル内のバージョン情報を更新する。Vercel Hobby内・Function 1個を維持する。
+> バージョンごとにファイルを増やさず、既存ファイル内のバージョン表記を更新する方針。

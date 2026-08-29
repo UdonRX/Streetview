@@ -9,10 +9,10 @@
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css?v=0.1.6" />
-  <title>Streetview Journey v0.1.14</title>
+  <title>Streetview Journey v0.1.15</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.14 Phase 1 Multi-frame Camera Path -->
+  <!-- Streetview Journey v0.1.15 Phase 1.1 Camera Path Tune -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
@@ -23,15 +23,15 @@
       <section class="bottom-hud">
         <div class="location-row"><span id="placeLabel">Demo route</span><span id="frameLabel">0 / 0</span></div>
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">0.08秒・Camera Path</span><span id="coordLabel">—</span></div>
+        <div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">0.08秒・Phase 1.1 Camera Path</span><span id="coordLabel">—</span></div>
       </section>
     </section>
     <section id="startPanel" class="start-panel">
       <div class="start-card">
-        <p class="eyebrow">v0.1.14 PHASE 1 CAMERA PATH</p>
-        <h1>0.08秒のまま、カメラの軌道を滑らかに。</h1>
-        <p class="lead">複数フレームの背景特徴を追跡し、傾き・中心・微小ズームを仮想カメラ軌道として平滑化するPhase 1。</p>
-        <div class="preset-card"><span class="preset-title">Phase 1 Multi-frame Camera Path</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
+        <p class="eyebrow">v0.1.15 PHASE 1.1 CAMERA PATH</p>
+        <h1>0.08秒を固定して、カメラの跳ねをさらに抑える。</h1>
+        <p class="lead">OpenCVとFar-fieldを信頼度に応じて混合し、7フレーム相当の仮想カメラ軌道で傾き・中心ズレを平滑化する。</p>
+        <div class="preset-card"><span class="preset-title">Phase 1.1 Camera Path Tune</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
         <details class="custom-route">
           <summary>緯度・経度から探す</summary>
           <div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label><label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label></div>
@@ -43,6 +43,6 @@
     </section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
-  <script src="/app.js?v=0.1.14" defer></script>
+  <script src="/app.js?v=0.1.15" defer></script>
 </body>
 </html>
