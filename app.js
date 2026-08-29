@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.8 Feathered Tile Flow */
+/* Streetview Journey v0.1.9 Normalized Blend Tile Flow */
 (() => {
-  const VERSION = '0.1.8';
+  const VERSION = '0.1.9';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS = 4;
   const TILE_ROWS = 5;
@@ -14,7 +14,10 @@
   const VECTOR_PASSES = 3;
   const MAX_NEIGHBOR_DX = 1.65;
   const MAX_NEIGHBOR_DY = 1.25;
-  const TILE_OVERLAP_CSS_PX = 10;
+  const TILE_OVERLAP_CSS_PX = 12;
+  const ACCUM_SCALE = 0.16;
+  const NORMALIZE_FPS = 30;
+  const MIN_WEIGHT_BYTE = 3;
 
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,14 +38,14 @@
     $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.8 FEATHERED TILE FLOW';
-      card.querySelector('h1').textContent = '境界線ではなく、景色を混ぜる。';
-      card.querySelector('.lead').textContent = '白いSeam Blendを使わず、隣接タイルを重ねてCosineフェザーで直接合成。水平化と近景/遠景Flowはそのまま維持するテスト版。';
+      card.querySelector('.eyebrow').textContent = 'v0.1.9 NORMALIZED BLEND TILE FLOW';
+      card.querySelector('h1').textContent = '格子を描かず、景色だけをつなぐ。';
+      card.querySelector('.lead').textContent = '12px重ねた実画像をCosineフェザーで混ぜ、色と重みを別々に積算して最後にピクセル単位で正規化するテスト版。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Feathered Tile Flowデモ';
+        preset.querySelector('.preset-title').textContent = 'Normalized Blend Tile Flowデモ';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '4×5 Tile Flow + 10px overlap + Cosine feather / 速度比較は維持';
+        preset.querySelector('small').textContent = '4×5 Tile Flow + 12px overlap + weight normalization / 速度比較は維持';
       }
       if (!document.querySelector('.speed-lab')) {
         const lab = document.createElement('div');
@@ -94,6 +97,13 @@
   let canvasDpr = 1;
   let canvasSignature = '';
   let currentImage = null;
+  let colorCanvas = null;
+  let colorCtx = null;
+  let weightCanvas = null;
+  let weightCtx = null;
+  let fallbackCanvas = null;
+  let fallbackCtx = null;
+  let outputImage = null;
 
   const renderCache = new Map();
   const corsCache = new Map();
@@ -191,29 +201,39 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v018`;
+        img.src = `${url}${sep}analysis=v019`;
       }));
     }
     return corsCache.get(url);
   }
 
+  function makeCanvas(w, h, alpha) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return { canvas: c, ctx: c.getContext('2d', { alpha, willReadFrequently: true }) };
+  }
+
   function canvasSize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.05);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.0);
     const w = Math.round((window.innerWidth || 390) * 1.06 * dpr);
     const h = Math.round((window.innerHeight || 844) * 1.06 * dpr);
     if (ui.canvas.width !== w || ui.canvas.height !== h) {
-      ui.canvas.width = w;
-      ui.canvas.height = h;
+      ui.canvas.width = w; ui.canvas.height = h;
     }
-    ctx = ui.canvas.getContext('2d', { alpha: false });
+    ctx = ui.canvas.getContext('2d', { alpha: false, willReadFrequently: true });
     canvasDpr = dpr;
     const signature = `${w}x${h}@${dpr}`;
     if (signature !== canvasSignature) {
       canvasSignature = signature;
       blendAssetCache.clear();
+      ({ canvas: colorCanvas, ctx: colorCtx } = makeCanvas(w, h, false));
+      ({ canvas: weightCanvas, ctx: weightCtx } = makeCanvas(w, h, false));
+      ({ canvas: fallbackCanvas, ctx: fallbackCtx } = makeCanvas(w, h, false));
+      outputImage = ctx.createImageData(w, h);
     }
     return { w, h, dpr };
   }
+
   function coverRect(canvas, image, anchorPercent) {
     const cw = canvas.width, ch = canvas.height;
     const ratio = Math.max(cw / image.naturalWidth, ch / image.naturalHeight);
@@ -237,8 +257,7 @@
       const img = await loadCors(route[i].url);
       if (!img) return null;
       const canvas = document.createElement('canvas');
-      canvas.width = ANALYSIS_W;
-      canvas.height = ANALYSIS_H;
+      canvas.width = ANALYSIS_W; canvas.height = ANALYSIS_H;
       const g = canvas.getContext('2d', { willReadFrequently: true });
       const rect = coverRect(canvas, img, anchorX(i));
       g.drawImage(img, rect.x, rect.y, rect.w, rect.h);
@@ -281,6 +300,7 @@
     rollRawCache.set(i, promise);
     return promise;
   }
+
   function smoothRoll(i) {
     if (rollSmoothCache.has(i)) return rollSmoothCache.get(i);
     const promise = (async () => {
@@ -293,16 +313,15 @@
     rollSmoothCache.set(i, promise);
     return promise;
   }
+
   async function correctedAnalysis(i) {
     const img = await loadCors(route[i].url);
     if (!img) return null;
     const roll = await smoothRoll(i);
     const canvas = document.createElement('canvas');
-    canvas.width = ANALYSIS_W;
-    canvas.height = ANALYSIS_H;
+    canvas.width = ANALYSIS_W; canvas.height = ANALYSIS_H;
     const g = canvas.getContext('2d', { willReadFrequently: true });
-    g.fillStyle = '#111';
-    g.fillRect(0, 0, ANALYSIS_W, ANALYSIS_H);
+    g.fillStyle = '#111'; g.fillRect(0, 0, ANALYSIS_W, ANALYSIS_H);
     drawCorrected(g, img, i, roll);
     try {
       const data = g.getImageData(0, 0, ANALYSIS_W, ANALYSIS_H).data;
@@ -326,6 +345,7 @@
     }
     return count ? score / count : 1e9;
   }
+
   function tileDepth(col, row) {
     const nx = Math.abs((col + .5) / TILE_COLS - .5) * 2;
     const ny = (row + .5) / TILE_ROWS;
@@ -419,29 +439,26 @@
   function createCorrectedFrame(image, i, rollDeg) {
     const { w, h } = canvasSize();
     const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = w; canvas.height = h;
     const g = canvas.getContext('2d', { alpha: false });
-    g.fillStyle = '#05070a';
-    g.fillRect(0, 0, w, h);
+    g.fillStyle = '#05070a'; g.fillRect(0, 0, w, h);
     drawCorrected(g, image, i, rollDeg);
     return canvas;
   }
 
   function blendAsset(col, row) {
     const w = ui.canvas.width, h = ui.canvas.height;
-    const overlap = Math.max(4, Math.round(TILE_OVERLAP_CSS_PX * canvasDpr));
+    const overlap = Math.max(5, Math.round(TILE_OVERLAP_CSS_PX * canvasDpr));
     const x0 = Math.floor(col * w / TILE_COLS), y0 = Math.floor(row * h / TILE_ROWS);
     const x1 = Math.ceil((col + 1) * w / TILE_COLS), y1 = Math.ceil((row + 1) * h / TILE_ROWS);
-    const left = col > 0 ? overlap : 0;
-    const right = col < TILE_COLS - 1 ? overlap : 0;
-    const top = row > 0 ? overlap : 0;
-    const bottom = row < TILE_ROWS - 1 ? overlap : 0;
+    const left = col > 0 ? overlap : 0, right = col < TILE_COLS - 1 ? overlap : 0;
+    const top = row > 0 ? overlap : 0, bottom = row < TILE_ROWS - 1 ? overlap : 0;
     const sx = Math.max(0, x0 - left), sy = Math.max(0, y0 - top);
     const ex = Math.min(w, x1 + right), ey = Math.min(h, y1 + bottom);
     const sw = ex - sx, sh = ey - sy;
     const key = `${canvasSignature}:${col}:${row}:${overlap}:${sw}x${sh}`;
     if (blendAssetCache.has(key)) return blendAssetCache.get(key);
+
     const scratch = document.createElement('canvas');
     scratch.width = sw; scratch.height = sh;
     const scratchCtx = scratch.getContext('2d', { alpha: true });
@@ -452,6 +469,7 @@
     const data = image.data;
     const featherW = Math.max(1, overlap * 2);
     const featherH = Math.max(1, overlap * 2);
+
     for (let y = 0; y < sh; y += 1) {
       let wy = 1;
       if (row > 0 && y < featherH) wy *= cosineRamp(y / featherH);
@@ -471,36 +489,86 @@
     return asset;
   }
 
-  function drawFeatheredTile(frame, vector, progress, incoming, alpha) {
-    const asset = blendAsset(vector.col, vector.row);
+  function prepareTileLayers(frame) {
+    const layers = [];
+    for (let row = 0; row < TILE_ROWS; row += 1) {
+      for (let col = 0; col < TILE_COLS; col += 1) {
+        const asset = blendAsset(col, row);
+        const c = document.createElement('canvas');
+        c.width = asset.sw; c.height = asset.sh;
+        const g = c.getContext('2d', { alpha: true });
+        g.drawImage(frame, asset.sx, asset.sy, asset.sw, asset.sh, 0, 0, asset.sw, asset.sh);
+        g.globalCompositeOperation = 'destination-in';
+        g.drawImage(asset.mask, 0, 0);
+        g.globalCompositeOperation = 'source-over';
+        layers.push({ asset, color: c });
+      }
+    }
+    return layers;
+  }
+
+  function clearAccumulator(targetCtx, w, h) {
+    targetCtx.globalCompositeOperation = 'source-over';
+    targetCtx.globalAlpha = 1;
+    targetCtx.fillStyle = '#000';
+    targetCtx.fillRect(0, 0, w, h);
+    targetCtx.globalCompositeOperation = 'lighter';
+  }
+
+  function accumulateLayer(layer, vector, progress, incoming, temporalAlpha) {
     const scaleX = ui.canvas.width / ANALYSIS_W;
     const scaleY = ui.canvas.height / ANALYSIS_H;
     const factor = incoming ? -(1 - progress) : progress;
-    const ox = vector.vx * scaleX * factor;
-    const oy = vector.vy * scaleY * factor;
-    const g = asset.scratchCtx;
-    g.clearRect(0, 0, asset.sw, asset.sh);
-    g.globalCompositeOperation = 'source-over';
-    g.globalAlpha = 1;
-    g.drawImage(frame, asset.sx, asset.sy, asset.sw, asset.sh, 0, 0, asset.sw, asset.sh);
-    g.globalCompositeOperation = 'destination-in';
-    g.drawImage(asset.mask, 0, 0);
-    g.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(asset.scratch, asset.sx + ox, asset.sy + oy);
+    const dx = layer.asset.sx + vector.vx * scaleX * factor;
+    const dy = layer.asset.sy + vector.vy * scaleY * factor;
+    const alpha = temporalAlpha * ACCUM_SCALE;
+    colorCtx.globalAlpha = alpha;
+    colorCtx.drawImage(layer.color, dx, dy);
+    weightCtx.globalAlpha = alpha;
+    weightCtx.drawImage(layer.asset.mask, dx, dy);
   }
 
-  function drawTileFlow(frameA, frameB, vectors, progress) {
+  function drawFallback(frameA, frameB, progress) {
+    const w = fallbackCanvas.width, h = fallbackCanvas.height;
+    fallbackCtx.globalCompositeOperation = 'source-over';
+    fallbackCtx.globalAlpha = 1;
+    fallbackCtx.drawImage(frameA, 0, 0, w, h);
+    fallbackCtx.globalAlpha = progress;
+    fallbackCtx.drawImage(frameB, 0, 0, w, h);
+    fallbackCtx.globalAlpha = 1;
+  }
+
+  function normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, progress) {
     const w = ui.canvas.width, h = ui.canvas.height;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#05070a';
-    ctx.fillRect(0, 0, w, h);
-    const outAlpha = 1 - progress;
-    const inAlpha = progress;
-    for (const vector of vectors) drawFeatheredTile(frameA, vector, progress, false, outAlpha);
-    for (const vector of vectors) drawFeatheredTile(frameB, vector, progress, true, inAlpha);
-    ctx.globalAlpha = 1;
+    clearAccumulator(colorCtx, w, h);
+    clearAccumulator(weightCtx, w, h);
+    const outAlpha = 1 - progress, inAlpha = progress;
+    for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersA[n], vectors[n], progress, false, outAlpha);
+    for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersB[n], vectors[n], progress, true, inAlpha);
+    colorCtx.globalCompositeOperation = 'source-over';
+    weightCtx.globalCompositeOperation = 'source-over';
+    colorCtx.globalAlpha = 1;
+    weightCtx.globalAlpha = 1;
+
+    drawFallback(frameA, frameB, progress);
+    const color = colorCtx.getImageData(0, 0, w, h).data;
+    const weight = weightCtx.getImageData(0, 0, w, h).data;
+    const fallback = fallbackCtx.getImageData(0, 0, w, h).data;
+    const out = outputImage.data;
+
+    for (let k = 0; k < out.length; k += 4) {
+      const wb = weight[k];
+      if (wb > MIN_WEIGHT_BYTE) {
+        const scale = 255 / wb;
+        out[k] = clamp(Math.round(color[k] * scale), 0, 255);
+        out[k + 1] = clamp(Math.round(color[k + 1] * scale), 0, 255);
+        out[k + 2] = clamp(Math.round(color[k + 2] * scale), 0, 255);
+      } else {
+        out[k] = fallback[k]; out[k + 1] = fallback[k + 1]; out[k + 2] = fallback[k + 2];
+      }
+      out[k + 3] = 255;
+    }
+    ctx.putImageData(outputImage, 0, 0);
   }
 
   async function warmAhead(i) {
@@ -509,6 +577,7 @@
     for (let k = i; k < Math.min(route.length, i + 7); k += 1) smoothRoll(k).catch(() => {});
     for (let k = i; k < Math.min(route.length - 1, i + 4); k += 1) tileVectors(k).catch(() => {});
   }
+
   function updateHud(i, rollValue = 0) {
     const frame = route[i];
     ui.num.textContent = `${i + 1} / ${route.length}`;
@@ -516,7 +585,7 @@
     const direction = travelBearing(i);
     ui.heading.textContent = Number.isFinite(direction) ? `${Math.round(direction)}°` : '—°';
     ui.coord.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Feather Tile・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
+    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Normalized Tile・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
   }
 
   async function showFirst() {
@@ -538,18 +607,26 @@
     const [rollA, rollB, vectors] = await Promise.all([smoothRoll(i), smoothRoll(i + 1), tileVectors(i)]);
     const frameA = createCorrectedFrame(currentImage, i, rollA);
     const frameB = createCorrectedFrame(nextImage, i + 1, rollB);
+    const layersA = prepareTileLayers(frameA);
+    const layersB = prepareTileLayers(frameB);
     const duration = Math.max(72, Math.round(speedMs * .82));
+    const minFrameMs = 1000 / NORMALIZE_FPS;
     const start = performance.now();
+    let lastDraw = -Infinity;
+
     await new Promise((resolve) => {
       function tick(now) {
         const t = clamp((now - start) / duration, 0, 1);
-        const smooth = t * t * (3 - 2 * t);
-        drawTileFlow(frameA, frameB, vectors, smooth);
+        if (t >= 1 || now - lastDraw >= minFrameMs) {
+          const smooth = t * t * (3 - 2 * t);
+          normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, smooth);
+          lastDraw = now;
+        }
         if (t < 1) requestAnimationFrame(tick); else resolve();
       }
       requestAnimationFrame(tick);
     });
-    ctx.globalAlpha = 1;
+
     ctx.drawImage(frameB, 0, 0);
     currentImage = nextImage;
     updateHud(i + 1, rollB);
@@ -596,10 +673,12 @@
     if (!Array.isArray(data.frames) || data.frames.length < 2) throw new Error('連続して再生できる写真が見つかりませんでした');
     return data;
   }
+
   async function requestWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try { wake = await navigator.wakeLock.request('screen'); } catch {}
   }
+
   async function start() {
     ui.startBtn.disabled = true;
     ui.startBtn.textContent = 'ルートを準備中…';
@@ -621,6 +700,7 @@
       ui.startBtn.textContent = '旅をはじめる';
     }
   }
+
   function reset() {
     token += 1;
     ui.edgeBlur?.classList.remove('drive-stabilized');
@@ -635,7 +715,7 @@
     if (document.visibilityState === 'visible' && (!wake || wake.released)) requestWakeLock();
   });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.8').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.9').catch(() => {}));
   }
   console.info(`Streetview Journey v${VERSION}`);
 })();
