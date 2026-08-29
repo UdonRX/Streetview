@@ -48,6 +48,7 @@
       }
       if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね';}}
       else if(new URLSearchParams(location.search).get('autostart')==='1')setTimeout(()=>document.getElementById('startButton')?.click(),180);
+      const back=document.getElementById('journeyBack');if(back)back.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();location.href='/';},true);
     });
   })();
   </script>
