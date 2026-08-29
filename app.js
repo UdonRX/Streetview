@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.7 Seamless Tile Flow */
+/* Streetview Journey v0.1.8 Feathered Tile Flow */
 (() => {
-  const VERSION = '0.1.7';
+  const VERSION = '0.1.8';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS = 4;
   const TILE_ROWS = 5;
@@ -10,44 +10,40 @@
   const ROLL_EMA = 0.34;
   const ROLL_STEP_LIMIT = 0.72;
   const PRELOAD_AHEAD = 12;
-  const VECTOR_SMOOTH = 0.46;
-  const TILE_OVERLAP_CSS_PX = 4.0;
-  const SEAM_BAND_CSS_PX = 5.0;
+  const VECTOR_SMOOTH = 0.62;
+  const VECTOR_PASSES = 3;
+  const MAX_NEIGHBOR_DX = 1.65;
+  const MAX_NEIGHBOR_DY = 1.25;
+  const TILE_OVERLAP_CSS_PX = 10;
 
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
   const rad = (value) => value * Math.PI / 180;
   const deg = (value) => value * 180 / Math.PI;
+  const cosineRamp = (t) => .5 - .5 * Math.cos(Math.PI * clamp(t, 0, 1));
 
   function installUI() {
     const viewer = $('viewer');
     const card = document.querySelector('.start-card');
-
     if (viewer && !$('flowCanvas')) {
       const canvas = document.createElement('canvas');
       canvas.id = 'flowCanvas';
       canvas.className = 'flow-canvas';
       viewer.querySelector('#layerB')?.insertAdjacentElement('afterend', canvas);
     }
-    if (viewer && !$('seamCanvas')) {
-      const canvas = document.createElement('canvas');
-      canvas.id = 'seamCanvas';
-      canvas.className = 'seam-canvas';
-      $('flowCanvas')?.insertAdjacentElement('afterend', canvas);
-    }
+    $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.7 SEAMLESS TILE FLOW';
-      card.querySelector('h1').textContent = 'タイルの境界を消す。';
-      card.querySelector('.lead').textContent = 'v0.1.6の水平化と20タイルFlowは維持し、隣接タイルの動きを滑らかにつないで境界線を目立ちにくくする比較版。';
+      card.querySelector('.eyebrow').textContent = 'v0.1.8 FEATHERED TILE FLOW';
+      card.querySelector('h1').textContent = '境界線ではなく、景色を混ぜる。';
+      card.querySelector('.lead').textContent = '白いSeam Blendを使わず、隣接タイルを重ねてCosineフェザーで直接合成。水平化と近景/遠景Flowはそのまま維持するテスト版。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Seamless Tile Flowデモ';
+        preset.querySelector('.preset-title').textContent = 'Feathered Tile Flowデモ';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '傾き補正 + 4×5 Tile Flow + Seam Blend / 速度比較は維持';
+        preset.querySelector('small').textContent = '4×5 Tile Flow + 10px overlap + Cosine feather / 速度比較は維持';
       }
-
       if (!document.querySelector('.speed-lab')) {
         const lab = document.createElement('div');
         lab.className = 'speed-lab';
@@ -65,27 +61,25 @@
     if (!$('stabilizedTileStyles')) {
       const style = document.createElement('style');
       style.id = 'stabilizedTileStyles';
-      style.textContent = `
-        .flow-canvas,.seam-canvas{position:absolute;inset:-3%;width:106%;height:106%;opacity:0;pointer-events:none;will-change:contents}
-        .flow-canvas{z-index:2;filter:${BASE_FILTER}}
-        .seam-canvas{z-index:2;filter:${BASE_FILTER} blur(1.1px);mix-blend-mode:normal}
-        .scene-layer{z-index:1}.vignette,.motion-blur{z-index:3}.top-hud,.bottom-hud{z-index:4}
-        .motion-blur.drive-stabilized{opacity:1!important;background:transparent;backdrop-filter:blur(.85px);-webkit-backdrop-filter:blur(.85px);mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);-webkit-mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);transition:none}
-        .speed-lab{margin:0 0 12px;padding:12px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(255,255,255,.04)}
-        .speed-title{display:flex;align-items:end;justify-content:space-between;gap:8px;margin-bottom:9px}.speed-title strong{font-size:12px}.speed-title small{font-size:9px;color:rgba(255,255,255,.48)}
-        .speed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.speed-grid label{position:relative}.speed-grid input{position:absolute;opacity:0;pointer-events:none}
-        .speed-grid span{display:grid;gap:3px;text-align:center;padding:10px 4px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(255,255,255,.035);font-size:11px;font-weight:750}
-        .speed-grid span small{font-size:8px;font-weight:500;color:rgba(255,255,255,.45)}.speed-grid input:checked+span{background:#fff;color:#080b0f;border-color:#fff}.speed-grid input:checked+span small{color:rgba(8,11,15,.55)}
-        .start-panel{overflow-y:auto}
-      `;
       document.head.appendChild(style);
     }
+    $('stabilizedTileStyles').textContent = `
+      .flow-canvas{position:absolute;z-index:2;inset:-3%;width:106%;height:106%;opacity:0;pointer-events:none;filter:${BASE_FILTER};will-change:contents}
+      .scene-layer{z-index:1}.vignette,.motion-blur{z-index:3}.top-hud,.bottom-hud{z-index:4}
+      .motion-blur.drive-stabilized{opacity:1!important;background:transparent;backdrop-filter:blur(.85px);-webkit-backdrop-filter:blur(.85px);mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);-webkit-mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);transition:none}
+      .speed-lab{margin:0 0 12px;padding:12px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(255,255,255,.04)}
+      .speed-title{display:flex;align-items:end;justify-content:space-between;gap:8px;margin-bottom:9px}.speed-title strong{font-size:12px}.speed-title small{font-size:9px;color:rgba(255,255,255,.48)}
+      .speed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.speed-grid label{position:relative}.speed-grid input{position:absolute;opacity:0;pointer-events:none}
+      .speed-grid span{display:grid;gap:3px;text-align:center;padding:10px 4px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(255,255,255,.035);font-size:11px;font-weight:750}
+      .speed-grid span small{font-size:8px;font-weight:500;color:rgba(255,255,255,.45)}.speed-grid input:checked+span{background:#fff;color:#080b0f;border-color:#fff}.speed-grid input:checked+span small{color:rgba(8,11,15,.55)}
+      .start-panel{overflow-y:auto}
+    `;
   }
 
   installUI();
 
   const ui = {
-    viewer: $('viewer'), a: $('layerA'), b: $('layerB'), canvas: $('flowCanvas'), seam: $('seamCanvas'),
+    viewer: $('viewer'), a: $('layerA'), b: $('layerB'), canvas: $('flowCanvas'),
     edgeBlur: document.querySelector('.motion-blur'), start: $('startPanel'), error: $('errorPanel'),
     startBtn: $('startButton'), retry: $('retryButton'), err: $('errorMessage'), bar: $('progressBar'),
     num: $('frameLabel'), place: $('placeLabel'), heading: $('headingLabel'), coord: $('coordLabel'),
@@ -97,8 +91,8 @@
   let wake = null;
   let speedMs = 120;
   let ctx = null;
-  let seamCtx = null;
   let canvasDpr = 1;
+  let canvasSignature = '';
   let currentImage = null;
 
   const renderCache = new Map();
@@ -107,6 +101,7 @@
   const rollRawCache = new Map();
   const rollSmoothCache = new Map();
   const tileCache = new Map();
+  const blendAssetCache = new Map();
 
   function angle(a, b) {
     if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
@@ -196,7 +191,7 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v017`;
+        img.src = `${url}${sep}analysis=v018`;
       }));
     }
     return corsCache.get(url);
@@ -206,11 +201,17 @@
     const dpr = Math.min(window.devicePixelRatio || 1, 1.05);
     const w = Math.round((window.innerWidth || 390) * 1.06 * dpr);
     const h = Math.round((window.innerHeight || 844) * 1.06 * dpr);
-    if (ui.canvas.width !== w || ui.canvas.height !== h) { ui.canvas.width = w; ui.canvas.height = h; }
-    if (ui.seam.width !== w || ui.seam.height !== h) { ui.seam.width = w; ui.seam.height = h; }
+    if (ui.canvas.width !== w || ui.canvas.height !== h) {
+      ui.canvas.width = w;
+      ui.canvas.height = h;
+    }
     ctx = ui.canvas.getContext('2d', { alpha: false });
-    seamCtx = ui.seam.getContext('2d', { alpha: true });
     canvasDpr = dpr;
+    const signature = `${w}x${h}@${dpr}`;
+    if (signature !== canvasSignature) {
+      canvasSignature = signature;
+      blendAssetCache.clear();
+    }
     return { w, h, dpr };
   }
   function coverRect(canvas, image, anchorPercent) {
@@ -330,19 +331,20 @@
     const ny = (row + .5) / TILE_ROWS;
     return clamp(.50 + .55 * ny + .22 * nx, .55, 1.28);
   }
+
   function smoothVectorField(vectors) {
     let field = vectors.map((v) => ({ ...v }));
-    for (let pass = 0; pass < 2; pass += 1) {
+    for (let pass = 0; pass < VECTOR_PASSES; pass += 1) {
       const prev = field;
       field = prev.map((v) => {
-        let sumX = v.vx * 2.4, sumY = v.vy * 2.4, sumW = 2.4;
+        let sumX = v.vx * 2.7, sumY = v.vy * 2.7, sumW = 2.7;
         for (let dy = -1; dy <= 1; dy += 1) {
           for (let dx = -1; dx <= 1; dx += 1) {
             if (!dx && !dy) continue;
             const col = v.col + dx, row = v.row + dy;
             if (col < 0 || col >= TILE_COLS || row < 0 || row >= TILE_ROWS) continue;
             const neighbor = prev[row * TILE_COLS + col];
-            const weight = dx && dy ? .42 : .72;
+            const weight = dx && dy ? .52 : .94;
             sumX += neighbor.vx * weight;
             sumY += neighbor.vy * weight;
             sumW += weight;
@@ -355,6 +357,23 @@
           vy: clamp(v.vy * (1 - VECTOR_SMOOTH) + avgY * VECTOR_SMOOTH, -3.6, 3.6)
         };
       });
+    }
+    for (let pass = 0; pass < 2; pass += 1) {
+      const next = field.map((v) => ({ ...v }));
+      for (const v of field) {
+        const neighbors = [];
+        if (v.col > 0) neighbors.push(field[v.row * TILE_COLS + v.col - 1]);
+        if (v.col < TILE_COLS - 1) neighbors.push(field[v.row * TILE_COLS + v.col + 1]);
+        if (v.row > 0) neighbors.push(field[(v.row - 1) * TILE_COLS + v.col]);
+        if (v.row < TILE_ROWS - 1) neighbors.push(field[(v.row + 1) * TILE_COLS + v.col]);
+        if (!neighbors.length) continue;
+        const avgX = neighbors.reduce((s, n) => s + n.vx, 0) / neighbors.length;
+        const avgY = neighbors.reduce((s, n) => s + n.vy, 0) / neighbors.length;
+        const item = next[v.row * TILE_COLS + v.col];
+        item.vx = clamp(item.vx, avgX - MAX_NEIGHBOR_DX, avgX + MAX_NEIGHBOR_DX);
+        item.vy = clamp(item.vy, avgY - MAX_NEIGHBOR_DY, avgY + MAX_NEIGHBOR_DY);
+      }
+      field = next;
     }
     return field;
   }
@@ -408,51 +427,80 @@
     drawCorrected(g, image, i, rollDeg);
     return canvas;
   }
-  function drawWarpedTile(frame, v, progress, incoming) {
+
+  function blendAsset(col, row) {
     const w = ui.canvas.width, h = ui.canvas.height;
-    const scaleX = w / ANALYSIS_W, scaleY = h / ANALYSIS_H;
-    const tileX0 = Math.floor(v.col * w / TILE_COLS), tileY0 = Math.floor(v.row * h / TILE_ROWS);
-    const tileX1 = Math.ceil((v.col + 1) * w / TILE_COLS), tileY1 = Math.ceil((v.row + 1) * h / TILE_ROWS);
-    const overlap = Math.max(2, Math.round(TILE_OVERLAP_CSS_PX * canvasDpr));
-    const sx = Math.max(0, tileX0 - overlap), sy = Math.max(0, tileY0 - overlap);
-    const ex = Math.min(w, tileX1 + overlap), ey = Math.min(h, tileY1 + overlap);
+    const overlap = Math.max(4, Math.round(TILE_OVERLAP_CSS_PX * canvasDpr));
+    const x0 = Math.floor(col * w / TILE_COLS), y0 = Math.floor(row * h / TILE_ROWS);
+    const x1 = Math.ceil((col + 1) * w / TILE_COLS), y1 = Math.ceil((row + 1) * h / TILE_ROWS);
+    const left = col > 0 ? overlap : 0;
+    const right = col < TILE_COLS - 1 ? overlap : 0;
+    const top = row > 0 ? overlap : 0;
+    const bottom = row < TILE_ROWS - 1 ? overlap : 0;
+    const sx = Math.max(0, x0 - left), sy = Math.max(0, y0 - top);
+    const ex = Math.min(w, x1 + right), ey = Math.min(h, y1 + bottom);
     const sw = ex - sx, sh = ey - sy;
+    const key = `${canvasSignature}:${col}:${row}:${overlap}:${sw}x${sh}`;
+    if (blendAssetCache.has(key)) return blendAssetCache.get(key);
+    const scratch = document.createElement('canvas');
+    scratch.width = sw; scratch.height = sh;
+    const scratchCtx = scratch.getContext('2d', { alpha: true });
+    const mask = document.createElement('canvas');
+    mask.width = sw; mask.height = sh;
+    const maskCtx = mask.getContext('2d', { alpha: true });
+    const image = maskCtx.createImageData(sw, sh);
+    const data = image.data;
+    const featherW = Math.max(1, overlap * 2);
+    const featherH = Math.max(1, overlap * 2);
+    for (let y = 0; y < sh; y += 1) {
+      let wy = 1;
+      if (row > 0 && y < featherH) wy *= cosineRamp(y / featherH);
+      if (row < TILE_ROWS - 1 && y >= sh - featherH) wy *= cosineRamp((sh - 1 - y) / featherH);
+      for (let x = 0; x < sw; x += 1) {
+        let wx = 1;
+        if (col > 0 && x < featherW) wx *= cosineRamp(x / featherW);
+        if (col < TILE_COLS - 1 && x >= sw - featherW) wx *= cosineRamp((sw - 1 - x) / featherW);
+        const alpha = Math.round(clamp(wx * wy, 0, 1) * 255);
+        const k = (y * sw + x) * 4;
+        data[k] = 255; data[k + 1] = 255; data[k + 2] = 255; data[k + 3] = alpha;
+      }
+    }
+    maskCtx.putImageData(image, 0, 0);
+    const asset = { sx, sy, sw, sh, scratch, scratchCtx, mask };
+    blendAssetCache.set(key, asset);
+    return asset;
+  }
+
+  function drawFeatheredTile(frame, vector, progress, incoming, alpha) {
+    const asset = blendAsset(vector.col, vector.row);
+    const scaleX = ui.canvas.width / ANALYSIS_W;
+    const scaleY = ui.canvas.height / ANALYSIS_H;
     const factor = incoming ? -(1 - progress) : progress;
-    const ox = v.vx * scaleX * factor, oy = v.vy * scaleY * factor;
-    ctx.drawImage(frame, sx, sy, sw, sh, sx + ox, sy + oy, sw, sh);
+    const ox = vector.vx * scaleX * factor;
+    const oy = vector.vy * scaleY * factor;
+    const g = asset.scratchCtx;
+    g.clearRect(0, 0, asset.sw, asset.sh);
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    g.drawImage(frame, asset.sx, asset.sy, asset.sw, asset.sh, 0, 0, asset.sw, asset.sh);
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(asset.mask, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(asset.scratch, asset.sx + ox, asset.sy + oy);
   }
-  function updateSeamOverlay(progress) {
-    const w = ui.canvas.width, h = ui.canvas.height;
-    const band = Math.max(2, Math.round(SEAM_BAND_CSS_PX * canvasDpr));
-    seamCtx.clearRect(0, 0, w, h);
-    seamCtx.globalAlpha = 1;
-    for (let col = 1; col < TILE_COLS; col += 1) {
-      const x = Math.round(col * w / TILE_COLS);
-      const sx = Math.max(0, x - band), width = Math.min(w - sx, band * 2);
-      seamCtx.drawImage(ui.canvas, sx, 0, width, h, sx, 0, width, h);
-    }
-    for (let row = 1; row < TILE_ROWS; row += 1) {
-      const y = Math.round(row * h / TILE_ROWS);
-      const sy = Math.max(0, y - band), height = Math.min(h - sy, band * 2);
-      seamCtx.drawImage(ui.canvas, 0, sy, w, height, 0, sy, w, height);
-    }
-    const mid = 4 * progress * (1 - progress);
-    ui.seam.style.opacity = String(.18 + .46 * mid);
-  }
-  function clearSeamOverlay() {
-    if (seamCtx) seamCtx.clearRect(0, 0, ui.seam.width, ui.seam.height);
-    ui.seam.style.opacity = '0';
-  }
+
   function drawTileFlow(frameA, frameB, vectors, progress) {
     const w = ui.canvas.width, h = ui.canvas.height;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
     ctx.fillStyle = '#05070a';
     ctx.fillRect(0, 0, w, h);
-    ctx.globalAlpha = 1 - progress;
-    for (const vector of vectors) drawWarpedTile(frameA, vector, progress, false);
-    ctx.globalAlpha = progress;
-    for (const vector of vectors) drawWarpedTile(frameB, vector, progress, true);
+    const outAlpha = 1 - progress;
+    const inAlpha = progress;
+    for (const vector of vectors) drawFeatheredTile(frameA, vector, progress, false, outAlpha);
+    for (const vector of vectors) drawFeatheredTile(frameB, vector, progress, true, inAlpha);
     ctx.globalAlpha = 1;
-    updateSeamOverlay(progress);
   }
 
   async function warmAhead(i) {
@@ -468,7 +516,7 @@
     const direction = travelBearing(i);
     ui.heading.textContent = Number.isFinite(direction) ? `${Math.round(direction)}°` : '—°';
     ui.coord.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Seamless Tile・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
+    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Feather Tile・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
   }
 
   async function showFirst() {
@@ -477,7 +525,6 @@
     const frame = createCorrectedFrame(image, 0, roll);
     canvasSize();
     ctx.drawImage(frame, 0, 0);
-    clearSeamOverlay();
     ui.canvas.style.opacity = '1';
     ui.a.style.opacity = '0';
     ui.b.style.opacity = '0';
@@ -485,6 +532,7 @@
     currentImage = image;
     updateHud(0, roll);
   }
+
   async function animatePair(i) {
     const nextImage = await loadRender(route[i + 1].url);
     const [rollA, rollB, vectors] = await Promise.all([smoothRoll(i), smoothRoll(i + 1), tileVectors(i)]);
@@ -492,7 +540,6 @@
     const frameB = createCorrectedFrame(nextImage, i + 1, rollB);
     const duration = Math.max(72, Math.round(speedMs * .82));
     const start = performance.now();
-
     await new Promise((resolve) => {
       function tick(now) {
         const t = clamp((now - start) / duration, 0, 1);
@@ -502,10 +549,8 @@
       }
       requestAnimationFrame(tick);
     });
-
     ctx.globalAlpha = 1;
     ctx.drawImage(frameB, 0, 0);
-    clearSeamOverlay();
     currentImage = nextImage;
     updateHud(i + 1, rollB);
   }
@@ -513,13 +558,12 @@
   async function play(frames) {
     const playToken = ++token;
     route = frames;
-    renderCache.clear(); corsCache.clear(); grayCache.clear(); rollRawCache.clear(); rollSmoothCache.clear(); tileCache.clear();
+    renderCache.clear(); corsCache.clear(); grayCache.clear(); rollRawCache.clear(); rollSmoothCache.clear(); tileCache.clear(); blendAssetCache.clear();
     if (!route.length) throw new Error('再生できる画像がありません');
     ui.place.textContent = route[0].sequenceId ? `Sequence #${route[0].sequenceId}` : 'KartaView route';
     await warmAhead(0);
     await Promise.race([Promise.all([smoothRoll(0), smoothRoll(1), tileVectors(0)]), sleep(650)]);
     await showFirst();
-
     let nextAt = performance.now() + speedMs;
     for (let i = 0; i < route.length - 1 && playToken === token; i += 1) {
       warmAhead(i + 1);
@@ -569,7 +613,6 @@
     } catch (error) {
       ui.edgeBlur?.classList.remove('drive-stabilized');
       ui.canvas.style.opacity = '0';
-      clearSeamOverlay();
       ui.err.textContent = error?.message || '不明なエラーが発生しました';
       ui.error.hidden = false;
       ui.start.hidden = true;
@@ -582,7 +625,6 @@
     token += 1;
     ui.edgeBlur?.classList.remove('drive-stabilized');
     ui.canvas.style.opacity = '0';
-    clearSeamOverlay();
     ui.error.hidden = true;
     ui.start.hidden = false;
   }
@@ -593,7 +635,7 @@
     if (document.visibilityState === 'visible' && (!wake || wake.released)) requestWakeLock();
   });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.7').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.8').catch(() => {}));
   }
   console.info(`Streetview Journey v${VERSION}`);
 })();
