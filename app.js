@@ -1,4 +1,4 @@
-/* Streetview Journey v0.1.9 Normalized Blend Tile Flow */
+/* Streetview Journey v0.1.9 Normalized Blend Playback Hotfix */
 (() => {
   const VERSION = '0.1.9';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
@@ -16,7 +16,8 @@
   const MAX_NEIGHBOR_DY = 1.25;
   const TILE_OVERLAP_CSS_PX = 12;
   const ACCUM_SCALE = 0.16;
-  const NORMALIZE_FPS = 30;
+  const NORMALIZE_FPS = 24;
+  const NORMALIZE_SCALE = 0.46;
   const MIN_WEIGHT_BYTE = 3;
 
   const $ = (id) => document.getElementById(id);
@@ -38,14 +39,14 @@
     $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.9 NORMALIZED BLEND TILE FLOW';
+      card.querySelector('.eyebrow').textContent = 'v0.1.9 NORMALIZED BLEND PLAYBACK HOTFIX';
       card.querySelector('h1').textContent = '格子を描かず、景色だけをつなぐ。';
-      card.querySelector('.lead').textContent = '12px重ねた実画像をCosineフェザーで混ぜ、色と重みを別々に積算して最後にピクセル単位で正規化するテスト版。';
+      card.querySelector('.lead').textContent = '正規化ブレンドは維持し、補間処理だけを軽量バッファへ移してiPhoneで連続再生できるよう修正した版。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Normalized Blend Tile Flowデモ';
+        preset.querySelector('.preset-title').textContent = 'Normalized Blend Playback Fixデモ';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '4×5 Tile Flow + 12px overlap + weight normalization / 速度比較は維持';
+        preset.querySelector('small').textContent = '4×5 Tile Flow + 12px overlap + 軽量weight normalization / 速度比較は維持';
       }
       if (!document.querySelector('.speed-lab')) {
         const lab = document.createElement('div');
@@ -201,7 +202,7 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v019`;
+        img.src = `${url}${sep}analysis=v019hotfix`;
       }));
     }
     return corsCache.get(url);
@@ -226,10 +227,12 @@
     if (signature !== canvasSignature) {
       canvasSignature = signature;
       blendAssetCache.clear();
-      ({ canvas: colorCanvas, ctx: colorCtx } = makeCanvas(w, h, false));
-      ({ canvas: weightCanvas, ctx: weightCtx } = makeCanvas(w, h, false));
-      ({ canvas: fallbackCanvas, ctx: fallbackCtx } = makeCanvas(w, h, false));
-      outputImage = ctx.createImageData(w, h);
+      const nw = Math.max(160, Math.round(w * NORMALIZE_SCALE));
+      const nh = Math.max(260, Math.round(h * NORMALIZE_SCALE));
+      ({ canvas: colorCanvas, ctx: colorCtx } = makeCanvas(nw, nh, false));
+      ({ canvas: weightCanvas, ctx: weightCtx } = makeCanvas(nw, nh, false));
+      ({ canvas: fallbackCanvas, ctx: fallbackCtx } = makeCanvas(nw, nh, false));
+      outputImage = colorCtx.createImageData(nw, nh);
     }
     return { w, h, dpr };
   }
@@ -447,8 +450,8 @@
   }
 
   function blendAsset(col, row) {
-    const w = ui.canvas.width, h = ui.canvas.height;
-    const overlap = Math.max(5, Math.round(TILE_OVERLAP_CSS_PX * canvasDpr));
+    const w = colorCanvas.width, h = colorCanvas.height;
+    const overlap = Math.max(3, Math.round(TILE_OVERLAP_CSS_PX * canvasDpr * NORMALIZE_SCALE));
     const x0 = Math.floor(col * w / TILE_COLS), y0 = Math.floor(row * h / TILE_ROWS);
     const x1 = Math.ceil((col + 1) * w / TILE_COLS), y1 = Math.ceil((row + 1) * h / TILE_ROWS);
     const left = col > 0 ? overlap : 0, right = col < TILE_COLS - 1 ? overlap : 0;
@@ -491,13 +494,19 @@
 
   function prepareTileLayers(frame) {
     const layers = [];
+    const scaleX = frame.width / colorCanvas.width;
+    const scaleY = frame.height / colorCanvas.height;
     for (let row = 0; row < TILE_ROWS; row += 1) {
       for (let col = 0; col < TILE_COLS; col += 1) {
         const asset = blendAsset(col, row);
         const c = document.createElement('canvas');
         c.width = asset.sw; c.height = asset.sh;
         const g = c.getContext('2d', { alpha: true });
-        g.drawImage(frame, asset.sx, asset.sy, asset.sw, asset.sh, 0, 0, asset.sw, asset.sh);
+        g.drawImage(
+          frame,
+          asset.sx * scaleX, asset.sy * scaleY, asset.sw * scaleX, asset.sh * scaleY,
+          0, 0, asset.sw, asset.sh
+        );
         g.globalCompositeOperation = 'destination-in';
         g.drawImage(asset.mask, 0, 0);
         g.globalCompositeOperation = 'source-over';
@@ -516,8 +525,8 @@
   }
 
   function accumulateLayer(layer, vector, progress, incoming, temporalAlpha) {
-    const scaleX = ui.canvas.width / ANALYSIS_W;
-    const scaleY = ui.canvas.height / ANALYSIS_H;
+    const scaleX = colorCanvas.width / ANALYSIS_W;
+    const scaleY = colorCanvas.height / ANALYSIS_H;
     const factor = incoming ? -(1 - progress) : progress;
     const dx = layer.asset.sx + vector.vx * scaleX * factor;
     const dy = layer.asset.sy + vector.vy * scaleY * factor;
@@ -539,7 +548,7 @@
   }
 
   function normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, progress) {
-    const w = ui.canvas.width, h = ui.canvas.height;
+    const w = colorCanvas.width, h = colorCanvas.height;
     clearAccumulator(colorCtx, w, h);
     clearAccumulator(weightCtx, w, h);
     const outAlpha = 1 - progress, inAlpha = progress;
@@ -568,7 +577,11 @@
       }
       out[k + 3] = 255;
     }
-    ctx.putImageData(outputImage, 0, 0);
+    colorCtx.globalCompositeOperation = 'copy';
+    colorCtx.putImageData(outputImage, 0, 0);
+    colorCtx.globalCompositeOperation = 'source-over';
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(colorCanvas, 0, 0, w, h, 0, 0, ui.canvas.width, ui.canvas.height);
   }
 
   async function warmAhead(i) {
@@ -585,7 +598,7 @@
     const direction = travelBearing(i);
     ui.heading.textContent = Number.isFinite(direction) ? `${Math.round(direction)}°` : '—°';
     ui.coord.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Normalized Tile・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
+    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Normalized Lite・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
   }
 
   async function showFirst() {
@@ -619,7 +632,16 @@
         const t = clamp((now - start) / duration, 0, 1);
         if (t >= 1 || now - lastDraw >= minFrameMs) {
           const smooth = t * t * (3 - 2 * t);
-          normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, smooth);
+          try {
+            normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, smooth);
+          } catch (error) {
+            console.warn('Normalized blend fallback', error);
+            ctx.globalAlpha = 1;
+            ctx.drawImage(frameA, 0, 0);
+            ctx.globalAlpha = smooth;
+            ctx.drawImage(frameB, 0, 0);
+            ctx.globalAlpha = 1;
+          }
           lastDraw = now;
         }
         if (t < 1) requestAnimationFrame(tick); else resolve();
