@@ -9,10 +9,10 @@
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css?v=0.1.6" />
-  <title>Streetview Journey v0.1.11 Speed Compare</title>
+  <title>Streetview Journey v0.1.12</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.11 Far-field Horizon Lock / 0.05s Speed Compare -->
+  <!-- Streetview Journey v0.1.12 Formal 50ms Far-field Horizon Lock -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
@@ -23,15 +23,15 @@
       <section class="bottom-hud">
         <div class="location-row"><span id="placeLabel">Demo route</span><span id="frameLabel">0 / 0</span></div>
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">B・Far-field Horizon Lock</span><span id="coordLabel">—</span></div>
+        <div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">B・Formal 50ms Far Lock</span><span id="coordLabel">—</span></div>
       </section>
     </section>
     <section id="startPanel" class="start-panel">
       <div class="start-card">
-        <p class="eyebrow">v0.1.11 FAR-FIELD HORIZON LOCK</p>
-        <h1>奥の景色を固定して、前へ進む。</h1>
-        <p class="lead">遠景の建物・地平線・消失点を優先して次写真の姿勢を揃え、その後でTile Flowを適用する安定化テスト版。</p>
-        <div class="preset-card"><span class="preset-title">Far-field Horizon Lockデモ</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
+        <p class="eyebrow">v0.1.12 FORMAL 50MS FAR-FIELD LOCK</p>
+        <h1>奥の景色を固定したまま、50msを正しく比べる。</h1>
+        <p class="lead">時計の先送りを使わず、実時間50msでFar-field Lock・Tile Flow・Normalized Blend・Perceptual Bridgeを0.10秒と同じ処理系で比較する正式テスト版。</p>
+        <div class="preset-card"><span class="preset-title">Formal 50ms Far-field Lockデモ</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
         <details class="custom-route">
           <summary>緯度・経度から探す</summary>
           <div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label><label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label></div>
@@ -43,40 +43,6 @@
     </section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
-  <script>
-    (() => {
-      const nativeRAF = window.requestAnimationFrame.bind(window);
-      window.requestAnimationFrame = (callback) => nativeRAF((timestamp) => {
-        const isUltraFast = document.querySelector('input[name="driveSpeed"]:checked')?.value === '50';
-        callback(isUltraFast ? timestamp + 38 : timestamp);
-      });
-
-      document.addEventListener('DOMContentLoaded', () => {
-        const grid = document.querySelector('.speed-grid');
-        if (!grid) return;
-        const labels = [...grid.querySelectorAll('label')];
-        const normal = labels.find((label) => label.querySelector('input')?.value === '100');
-        const relaxed = labels.find((label) => label.querySelector('input')?.value === '120');
-        const fast = labels.find((label) => label.querySelector('input')?.value === '150');
-
-        if (fast) {
-          const input = fast.querySelector('input');
-          input.value = '50';
-          input.checked = false;
-          fast.querySelector('span').innerHTML = '0.05秒<small>高速</small>';
-        }
-        if (normal) {
-          normal.querySelector('input').checked = true;
-          normal.querySelector('span').innerHTML = '0.10秒<small>標準</small>';
-        }
-        if (relaxed) {
-          relaxed.querySelector('input').checked = false;
-          relaxed.querySelector('span').innerHTML = '0.12秒<small>比較</small>';
-        }
-        if (fast && normal && relaxed) grid.replaceChildren(fast, normal, relaxed);
-      });
-    })();
-  </script>
-  <script src="/app.js?v=0.1.11" defer></script>
+  <script src="/app.js?v=0.1.12" defer></script>
 </body>
 </html>
