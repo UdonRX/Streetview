@@ -1,14 +1,14 @@
-/* Streetview Journey v0.1.10 Perceptual Bridge Flow */
+/* Streetview Journey v0.1.11 Far-field Horizon Lock */
 (() => {
-  const VERSION = '0.1.10';
+  const VERSION = '0.1.11';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS = 4;
   const TILE_ROWS = 5;
   const ANALYSIS_W = 80;
   const ANALYSIS_H = 120;
-  const ROLL_LIMIT = 3.5;
-  const ROLL_EMA = 0.34;
-  const ROLL_STEP_LIMIT = 0.72;
+  const ROLL_LIMIT = 3.2;
+  const ROLL_EMA = 0.22;
+  const ROLL_STEP_LIMIT = 0.36;
   const PRELOAD_AHEAD = 12;
   const VECTOR_SMOOTH = 0.62;
   const VECTOR_PASSES = 3;
@@ -22,6 +22,19 @@
   const BRIDGE_RADIAL_GAIN = 0.014;
   const BRIDGE_BLUR_BOOST = 1.20;
   const BRIDGE_MIN_STRENGTH = 0.18;
+  const FAR_X0 = 10;
+  const FAR_X1 = 70;
+  const FAR_Y0 = 20;
+  const FAR_Y1 = 78;
+  const FAR_SEARCH_X = 5;
+  const FAR_SEARCH_Y = 4;
+  const FAR_MIN_CONFIDENCE = 0.018;
+  const FAR_LOCK_GAIN = 0.72;
+  const FAR_LOCK_DECAY = 0.94;
+  const FAR_LOCK_MAX_X = 5.2;
+  const FAR_LOCK_MAX_Y = 3.2;
+  const FAR_LOCK_STEP_X = 1.15;
+  const FAR_LOCK_STEP_Y = 0.82;
 
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,27 +55,26 @@
     $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.10 PERCEPTUAL BRIDGE FLOW';
-      card.querySelector('h1').textContent = '飛びを、前進として見せる。';
-      card.querySelector('.lead').textContent = 'Normalized Tile Flowに、等間隔の中間ステップと周辺視野の前進スミアを加え、写真間の距離を瞬間移動ではなく連続した移動として感じやすくする実験版。';
+      card.querySelector('.eyebrow').textContent = 'v0.1.11 FAR-FIELD HORIZON LOCK';
+      card.querySelector('h1').textContent = '奥の景色を固定して、前へ進む。';
+      card.querySelector('.lead').textContent = '遠景だけを基準に次写真の上下・左右・傾きを先に揃え、その後で既存のTile Flowを適用。近景の車や人に引っ張られにくい安定化テスト版。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Perceptual Bridge Flowデモ';
+        preset.querySelector('.preset-title').textContent = 'Far-field Horizon Lockデモ';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '4×5 Tile Flow + Apparent-motion bridge + 周辺モーションマスク / 速度比較は維持';
+        preset.querySelector('small').textContent = '遠景Anchor + Horizon/Vanishing Lock + 4×5 Tile Flow / 0.10秒を標準';
       }
-      if (!document.querySelector('.speed-lab')) {
-        const lab = document.createElement('div');
-        lab.className = 'speed-lab';
-        lab.innerHTML = `
-          <div class="speed-title"><strong>B 自転車・ドライブ風</strong><small>再生速度を比較</small></div>
-          <div class="speed-grid">
-            <label><input type="radio" name="driveSpeed" value="100"><span>0.10秒<small>最速</small></span></label>
-            <label><input type="radio" name="driveSpeed" value="120" checked><span>0.12秒<small>標準</small></span></label>
-            <label><input type="radio" name="driveSpeed" value="150"><span>0.15秒<small>安定</small></span></label>
-          </div>`;
-        preset?.insertAdjacentElement('beforebegin', lab);
-      }
+      document.querySelector('.speed-lab')?.remove();
+      const lab = document.createElement('div');
+      lab.className = 'speed-lab';
+      lab.innerHTML = `
+        <div class="speed-title"><strong>B 自転車・ドライブ風</strong><small>再生速度を比較</small></div>
+        <div class="speed-grid">
+          <label><input type="radio" name="driveSpeed" value="100" checked><span>0.10秒<small>標準</small></span></label>
+          <label><input type="radio" name="driveSpeed" value="120"><span>0.12秒<small>比較</small></span></label>
+          <label><input type="radio" name="driveSpeed" value="150"><span>0.15秒<small>比較</small></span></label>
+        </div>`;
+      preset?.insertAdjacentElement('beforebegin', lab);
     }
 
     if (!$('stabilizedTileStyles')) {
@@ -96,24 +108,26 @@
   let route = [];
   let token = 0;
   let wake = null;
-  let speedMs = 120;
+  let speedMs = 100;
   let ctx = null;
   let canvasDpr = 1;
   let canvasSignature = '';
   let currentImage = null;
-  let colorCanvas = null;
-  let colorCtx = null;
-  let weightCanvas = null;
-  let weightCtx = null;
-  let fallbackCanvas = null;
-  let fallbackCtx = null;
+  let colorCanvas = null, colorCtx = null;
+  let weightCanvas = null, weightCtx = null;
+  let fallbackCanvas = null, fallbackCtx = null;
   let outputImage = null;
 
   const renderCache = new Map();
   const corsCache = new Map();
   const grayCache = new Map();
+  const farEdgeCache = new Map();
   const rollRawCache = new Map();
   const rollSmoothCache = new Map();
+  const correctedGrayCache = new Map();
+  const farPairCache = new Map();
+  const farLockCache = new Map();
+  const stabilizedGrayCache = new Map();
   const tileCache = new Map();
   const blendAssetCache = new Map();
 
@@ -190,14 +204,12 @@
     const turnPart = clamp(turn / 32, 0, 1);
     return clamp(BRIDGE_MIN_STRENGTH + distancePart * .62 + turnPart * .20, BRIDGE_MIN_STRENGTH, 1);
   }
-
   function setPerceptualBridgeVisual(progress, strength) {
     if (!ui.edgeBlur) return;
     const pulse = Math.sin(Math.PI * clamp(progress, 0, 1));
     const blur = .85 + BRIDGE_BLUR_BOOST * strength * pulse;
     ui.edgeBlur.style.setProperty('--drive-blur', `${blur.toFixed(2)}px`);
   }
-
   function resetPerceptualBridgeVisual() {
     ui.edgeBlur?.style.setProperty('--drive-blur', '.85px');
   }
@@ -224,7 +236,7 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v0110`;
+        img.src = `${url}${sep}analysis=v0111`;
       }));
     }
     return corsCache.get(url);
@@ -235,7 +247,6 @@
     c.width = w; c.height = h;
     return { canvas: c, ctx: c.getContext('2d', { alpha, willReadFrequently: true }) };
   }
-
   function canvasSize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 1.0);
     const w = Math.round((window.innerWidth || 390) * 1.06 * dpr);
@@ -258,17 +269,19 @@
     }
     return { w, h, dpr };
   }
-
   function coverRect(canvas, image, anchorPercent) {
     const cw = canvas.width, ch = canvas.height;
     const ratio = Math.max(cw / image.naturalWidth, ch / image.naturalHeight);
     const dw = image.naturalWidth * ratio, dh = image.naturalHeight * ratio;
     return { x: (cw - dw) * anchorPercent / 100, y: (ch - dh) / 2, w: dw, h: dh };
   }
-  function drawCorrected(targetCtx, image, i, rollDeg, alpha = 1) {
+  function drawBase(targetCtx, image, i, rollDeg, lock = null, alpha = 1) {
     const rect = coverRect(targetCtx.canvas, image, anchorX(i));
+    const lx = lock ? lock.x * targetCtx.canvas.width / ANALYSIS_W : 0;
+    const ly = lock ? lock.y * targetCtx.canvas.height / ANALYSIS_H : 0;
     targetCtx.save();
     targetCtx.globalAlpha = alpha;
+    targetCtx.translate(lx, ly);
     targetCtx.translate(targetCtx.canvas.width / 2, targetCtx.canvas.height / 2);
     targetCtx.rotate(rad(rollDeg));
     targetCtx.translate(-targetCtx.canvas.width / 2, -targetCtx.canvas.height / 2);
@@ -297,26 +310,50 @@
     return promise;
   }
 
+  function edgeMap(gray) {
+    const out = new Float32Array(ANALYSIS_W * ANALYSIS_H);
+    if (!gray) return out;
+    for (let y = 1; y < ANALYSIS_H - 1; y += 1) {
+      for (let x = 1; x < ANALYSIS_W - 1; x += 1) {
+        const gx = gray[y * ANALYSIS_W + x + 1] - gray[y * ANALYSIS_W + x - 1];
+        const gy = gray[(y + 1) * ANALYSIS_W + x] - gray[(y - 1) * ANALYSIS_W + x];
+        out[y * ANALYSIS_W + x] = Math.min(255, Math.abs(gx) + Math.abs(gy));
+      }
+    }
+    return out;
+  }
+
+  async function farEdge(i) {
+    if (farEdgeCache.has(i)) return farEdgeCache.get(i);
+    const promise = analysisGray(i).then(edgeMap);
+    farEdgeCache.set(i, promise);
+    return promise;
+  }
+
   async function rawRoll(i) {
     if (rollRawCache.has(i)) return rollRawCache.get(i);
     const promise = (async () => {
       const gray = await analysisGray(i);
       if (!gray) return 0;
       let sx = 0, sy = 0, sum = 0;
-      for (let y = 12; y < ANALYSIS_H - 10; y += 2) {
-        for (let x = 7; x < ANALYSIS_W - 7; x += 2) {
+      for (let y = FAR_Y0; y < FAR_Y1; y += 2) {
+        const yw = 0.65 + 0.35 * ((y - FAR_Y0) / Math.max(1, FAR_Y1 - FAR_Y0));
+        for (let x = FAR_X0; x < FAR_X1; x += 2) {
           const gx = gray[y * ANALYSIS_W + x + 1] - gray[y * ANALYSIS_W + x - 1];
           const gy = gray[(y + 1) * ANALYSIS_W + x] - gray[(y - 1) * ANALYSIS_W + x];
           const mag = Math.hypot(gx, gy);
-          if (mag < 18) continue;
+          if (mag < 20) continue;
           const theta = Math.atan2(gy, gx);
-          const weight = Math.min(mag, 160);
+          const axisDistance = Math.min(Math.abs(Math.sin(theta)), Math.abs(Math.cos(theta)));
+          if (axisDistance > .42) continue;
+          const centerW = 1 - Math.min(0.45, Math.abs(x - ANALYSIS_W / 2) / ANALYSIS_W);
+          const weight = Math.min(mag, 170) * yw * centerW;
           sx += Math.cos(4 * theta) * weight;
           sy += Math.sin(4 * theta) * weight;
           sum += weight;
         }
       }
-      if (!sum || Math.hypot(sx, sy) / sum < .075) return 0;
+      if (!sum || Math.hypot(sx, sy) / sum < .08) return 0;
       let correction = -deg(Math.atan2(sy, sx)) / 4;
       while (correction > 22.5) correction -= 45;
       while (correction < -22.5) correction += 45;
@@ -330,7 +367,7 @@
     if (rollSmoothCache.has(i)) return rollSmoothCache.get(i);
     const promise = (async () => {
       const raw = await rawRoll(i);
-      if (i === 0) return clamp(raw * .6, -ROLL_LIMIT, ROLL_LIMIT);
+      if (i === 0) return clamp(raw * .65, -ROLL_LIMIT, ROLL_LIMIT);
       const prev = await smoothRoll(i - 1);
       const target = prev * (1 - ROLL_EMA) + raw * ROLL_EMA;
       return clamp(prev + clamp(target - prev, -ROLL_STEP_LIMIT, ROLL_STEP_LIMIT), -ROLL_LIMIT, ROLL_LIMIT);
@@ -339,21 +376,108 @@
     return promise;
   }
 
-  async function correctedAnalysis(i) {
-    const img = await loadCors(route[i].url);
-    if (!img) return null;
-    const roll = await smoothRoll(i);
-    const canvas = document.createElement('canvas');
-    canvas.width = ANALYSIS_W; canvas.height = ANALYSIS_H;
-    const g = canvas.getContext('2d', { willReadFrequently: true });
-    g.fillStyle = '#111'; g.fillRect(0, 0, ANALYSIS_W, ANALYSIS_H);
-    drawCorrected(g, img, i, roll);
-    try {
-      const data = g.getImageData(0, 0, ANALYSIS_W, ANALYSIS_H).data;
-      const gray = new Float32Array(ANALYSIS_W * ANALYSIS_H);
-      for (let k = 0, j = 0; k < gray.length; k += 1, j += 4) gray[k] = data[j] * .299 + data[j + 1] * .587 + data[j + 2] * .114;
-      return gray;
-    } catch { return null; }
+  async function correctedGray(i) {
+    if (correctedGrayCache.has(i)) return correctedGrayCache.get(i);
+    const promise = (async () => {
+      const img = await loadCors(route[i].url);
+      if (!img) return null;
+      const roll = await smoothRoll(i);
+      const canvas = document.createElement('canvas');
+      canvas.width = ANALYSIS_W; canvas.height = ANALYSIS_H;
+      const g = canvas.getContext('2d', { willReadFrequently: true });
+      g.fillStyle = '#111'; g.fillRect(0, 0, ANALYSIS_W, ANALYSIS_H);
+      drawBase(g, img, i, roll, null);
+      try {
+        const data = g.getImageData(0, 0, ANALYSIS_W, ANALYSIS_H).data;
+        const gray = new Float32Array(ANALYSIS_W * ANALYSIS_H);
+        for (let k = 0, j = 0; k < gray.length; k += 1, j += 4) gray[k] = data[j] * .299 + data[j + 1] * .587 + data[j + 2] * .114;
+        return gray;
+      } catch { return null; }
+    })();
+    correctedGrayCache.set(i, promise);
+    return promise;
+  }
+
+  function farScore(a, b, dx, dy) {
+    let score = 0, weightSum = 0;
+    for (let y = FAR_Y0 + 2; y < FAR_Y1 - 2; y += 2) {
+      const by = y + dy;
+      if (by < 1 || by >= ANALYSIS_H - 1) continue;
+      for (let x = FAR_X0 + 2; x < FAR_X1 - 2; x += 2) {
+        const bx = x + dx;
+        if (bx < 1 || bx >= ANALYSIS_W - 1) continue;
+        const av = a[y * ANALYSIS_W + x];
+        const bv = b[by * ANALYSIS_W + bx];
+        const localW = 0.45 + Math.min(1.6, (av + bv) / 120);
+        score += Math.abs(av - bv) * localW;
+        weightSum += localW;
+      }
+    }
+    return weightSum ? score / weightSum : 1e9;
+  }
+
+  async function farPair(i) {
+    if (farPairCache.has(i)) return farPairCache.get(i);
+    const promise = (async () => {
+      const [ga, gb] = await Promise.all([correctedGray(i), correctedGray(i + 1)]);
+      if (!ga || !gb) return { dx: 0, dy: 0, confidence: 0 };
+      const a = edgeMap(ga), b = edgeMap(gb);
+      const base = farScore(a, b, 0, 0);
+      let best = { dx: 0, dy: 0, score: base };
+      for (let dy = -FAR_SEARCH_Y; dy <= FAR_SEARCH_Y; dy += 1) {
+        for (let dx = -FAR_SEARCH_X; dx <= FAR_SEARCH_X; dx += 1) {
+          const score = farScore(a, b, dx, dy);
+          if (score < best.score) best = { dx, dy, score };
+        }
+      }
+      const confidence = clamp((base - best.score) / Math.max(base, 1), 0, 1);
+      if (confidence < FAR_MIN_CONFIDENCE) return { dx: 0, dy: 0, confidence };
+      return { dx: best.dx, dy: best.dy, confidence };
+    })();
+    farPairCache.set(i, promise);
+    return promise;
+  }
+
+  function farLock(i) {
+    if (farLockCache.has(i)) return farLockCache.get(i);
+    const promise = (async () => {
+      if (i <= 0) return { x: 0, y: 0, confidence: 1 };
+      const [prev, pair] = await Promise.all([farLock(i - 1), farPair(i - 1)]);
+      const gain = FAR_LOCK_GAIN * clamp(pair.confidence / 0.12, 0.25, 1);
+      const corrX = -pair.dx * gain;
+      const corrY = -pair.dy * gain;
+      const targetX = clamp((prev.x + corrX) * FAR_LOCK_DECAY, -FAR_LOCK_MAX_X, FAR_LOCK_MAX_X);
+      const targetY = clamp((prev.y + corrY) * FAR_LOCK_DECAY, -FAR_LOCK_MAX_Y, FAR_LOCK_MAX_Y);
+      return {
+        x: clamp(prev.x + clamp(targetX - prev.x, -FAR_LOCK_STEP_X, FAR_LOCK_STEP_X), -FAR_LOCK_MAX_X, FAR_LOCK_MAX_X),
+        y: clamp(prev.y + clamp(targetY - prev.y, -FAR_LOCK_STEP_Y, FAR_LOCK_STEP_Y), -FAR_LOCK_MAX_Y, FAR_LOCK_MAX_Y),
+        confidence: pair.confidence
+      };
+    })();
+    farLockCache.set(i, promise);
+    return promise;
+  }
+
+  async function stabilizedGray(i) {
+    if (stabilizedGrayCache.has(i)) return stabilizedGrayCache.get(i);
+    const promise = (async () => {
+      const img = await loadCors(route[i].url);
+      if (!img) return null;
+      const [roll, lock] = await Promise.all([smoothRoll(i), farLock(i)]);
+      const canvas = document.createElement('canvas');
+      canvas.width = ANALYSIS_W; canvas.height = ANALYSIS_H;
+      const g = canvas.getContext('2d', { willReadFrequently: true });
+      g.fillStyle = '#111'; g.fillRect(0, 0, ANALYSIS_W, ANALYSIS_H);
+      drawBase(g, img, i, roll, lock);
+      try {
+        const data = g.getImageData(0, 0, ANALYSIS_W, ANALYSIS_H).data;
+        const gray = new Float32Array(ANALYSIS_W * ANALYSIS_H);
+        for (let k = 0, j = 0; k < gray.length; k += 1, j += 4) gray[k] = data[j] * .299 + data[j + 1] * .587 + data[j + 2] * .114;
+        return gray;
+      } catch { return null; }
+    })();
+    stabilizedGrayCache.set(i, promise);
+    return promise;
   }
 
   function blockScore(a, b, x0, y0, x1, y1, dx, dy) {
@@ -370,13 +494,11 @@
     }
     return count ? score / count : 1e9;
   }
-
   function tileDepth(col, row) {
     const nx = Math.abs((col + .5) / TILE_COLS - .5) * 2;
     const ny = (row + .5) / TILE_ROWS;
     return clamp(.50 + .55 * ny + .22 * nx, .55, 1.28);
   }
-
   function smoothVectorField(vectors) {
     let field = vectors.map((v) => ({ ...v }));
     for (let pass = 0; pass < VECTOR_PASSES; pass += 1) {
@@ -388,19 +510,13 @@
             if (!dx && !dy) continue;
             const col = v.col + dx, row = v.row + dy;
             if (col < 0 || col >= TILE_COLS || row < 0 || row >= TILE_ROWS) continue;
-            const neighbor = prev[row * TILE_COLS + col];
+            const n = prev[row * TILE_COLS + col];
             const weight = dx && dy ? .52 : .94;
-            sumX += neighbor.vx * weight;
-            sumY += neighbor.vy * weight;
-            sumW += weight;
+            sumX += n.vx * weight; sumY += n.vy * weight; sumW += weight;
           }
         }
         const avgX = sumX / sumW, avgY = sumY / sumW;
-        return {
-          ...v,
-          vx: clamp(v.vx * (1 - VECTOR_SMOOTH) + avgX * VECTOR_SMOOTH, -4.8, 4.8),
-          vy: clamp(v.vy * (1 - VECTOR_SMOOTH) + avgY * VECTOR_SMOOTH, -3.6, 3.6)
-        };
+        return { ...v, vx: clamp(v.vx * (1 - VECTOR_SMOOTH) + avgX * VECTOR_SMOOTH, -4.8, 4.8), vy: clamp(v.vy * (1 - VECTOR_SMOOTH) + avgY * VECTOR_SMOOTH, -3.6, 3.6) };
       });
     }
     for (let pass = 0; pass < 2; pass += 1) {
@@ -429,7 +545,7 @@
       const geo = geoAlignment(i);
       const globalX = geo.x / Math.max(320, window.innerWidth || 390) * ANALYSIS_W;
       const globalY = geo.y / Math.max(600, window.innerHeight || 844) * ANALYSIS_H;
-      const [a, b] = await Promise.all([correctedAnalysis(i), correctedAnalysis(i + 1)]);
+      const [a, b] = await Promise.all([stabilizedGray(i), stabilizedGray(i + 1)]);
       const vectors = [];
       for (let row = 0; row < TILE_ROWS; row += 1) {
         for (let col = 0; col < TILE_COLS; col += 1) {
@@ -461,14 +577,15 @@
     return promise;
   }
 
-  function createCorrectedFrame(image, i, rollDeg) {
+  async function createStabilizedFrame(image, i) {
     const { w, h } = canvasSize();
+    const [roll, lock] = await Promise.all([smoothRoll(i), farLock(i)]);
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     const g = canvas.getContext('2d', { alpha: false });
     g.fillStyle = '#05070a'; g.fillRect(0, 0, w, h);
-    drawCorrected(g, image, i, rollDeg);
-    return canvas;
+    drawBase(g, image, i, roll, lock);
+    return { canvas, roll, lock };
   }
 
   function blendAsset(col, row) {
@@ -483,18 +600,12 @@
     const sw = ex - sx, sh = ey - sy;
     const key = `${canvasSignature}:${col}:${row}:${overlap}:${sw}x${sh}`;
     if (blendAssetCache.has(key)) return blendAssetCache.get(key);
-
-    const scratch = document.createElement('canvas');
-    scratch.width = sw; scratch.height = sh;
-    const scratchCtx = scratch.getContext('2d', { alpha: true });
     const mask = document.createElement('canvas');
     mask.width = sw; mask.height = sh;
     const maskCtx = mask.getContext('2d', { alpha: true });
     const image = maskCtx.createImageData(sw, sh);
     const data = image.data;
-    const featherW = Math.max(1, overlap * 2);
-    const featherH = Math.max(1, overlap * 2);
-
+    const featherW = Math.max(1, overlap * 2), featherH = Math.max(1, overlap * 2);
     for (let y = 0; y < sh; y += 1) {
       let wy = 1;
       if (row > 0 && y < featherH) wy *= cosineRamp(y / featherH);
@@ -509,7 +620,7 @@
       }
     }
     maskCtx.putImageData(image, 0, 0);
-    const asset = { sx, sy, sw, sh, scratch, scratchCtx, mask };
+    const asset = { sx, sy, sw, sh, mask };
     blendAssetCache.set(key, asset);
     return asset;
   }
@@ -524,11 +635,7 @@
         const c = document.createElement('canvas');
         c.width = asset.sw; c.height = asset.sh;
         const g = c.getContext('2d', { alpha: true });
-        g.drawImage(
-          frame,
-          asset.sx * scaleX, asset.sy * scaleY, asset.sw * scaleX, asset.sh * scaleY,
-          0, 0, asset.sw, asset.sh
-        );
+        g.drawImage(frame, asset.sx * scaleX, asset.sy * scaleY, asset.sw * scaleX, asset.sh * scaleY, 0, 0, asset.sw, asset.sh);
         g.globalCompositeOperation = 'destination-in';
         g.drawImage(asset.mask, 0, 0);
         g.globalCompositeOperation = 'source-over';
@@ -559,19 +666,15 @@
     const dx = layer.asset.sx + vector.vx * scaleX * factor + (tileCx - vanishX) * radial;
     const dy = layer.asset.sy + vector.vy * scaleY * factor + (tileCy - vanishY) * radial;
     const alpha = temporalAlpha * ACCUM_SCALE;
-    colorCtx.globalAlpha = alpha;
-    colorCtx.drawImage(layer.color, dx, dy);
-    weightCtx.globalAlpha = alpha;
-    weightCtx.drawImage(layer.asset.mask, dx, dy);
+    colorCtx.globalAlpha = alpha; colorCtx.drawImage(layer.color, dx, dy);
+    weightCtx.globalAlpha = alpha; weightCtx.drawImage(layer.asset.mask, dx, dy);
   }
 
   function drawFallback(frameA, frameB, progress) {
     const w = fallbackCanvas.width, h = fallbackCanvas.height;
     fallbackCtx.globalCompositeOperation = 'source-over';
-    fallbackCtx.globalAlpha = 1;
-    fallbackCtx.drawImage(frameA, 0, 0, w, h);
-    fallbackCtx.globalAlpha = progress;
-    fallbackCtx.drawImage(frameB, 0, 0, w, h);
+    fallbackCtx.globalAlpha = 1; fallbackCtx.drawImage(frameA, 0, 0, w, h);
+    fallbackCtx.globalAlpha = progress; fallbackCtx.drawImage(frameB, 0, 0, w, h);
     fallbackCtx.globalAlpha = 1;
   }
 
@@ -584,15 +687,12 @@
     for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersB[n], vectors[n], progress, true, inAlpha, bridgeStrength);
     colorCtx.globalCompositeOperation = 'source-over';
     weightCtx.globalCompositeOperation = 'source-over';
-    colorCtx.globalAlpha = 1;
-    weightCtx.globalAlpha = 1;
-
+    colorCtx.globalAlpha = 1; weightCtx.globalAlpha = 1;
     drawFallback(frameA, frameB, progress);
     const color = colorCtx.getImageData(0, 0, w, h).data;
     const weight = weightCtx.getImageData(0, 0, w, h).data;
     const fallback = fallbackCtx.getImageData(0, 0, w, h).data;
     const out = outputImage.data;
-
     for (let k = 0; k < out.length; k += 4) {
       const wb = weight[k];
       if (wb > MIN_WEIGHT_BYTE) {
@@ -615,64 +715,60 @@
   async function warmAhead(i) {
     const end = Math.min(route.length, i + PRELOAD_AHEAD + 1);
     for (let k = i + 1; k < end; k += 1) loadRender(route[k].url).catch(() => {});
-    for (let k = i; k < Math.min(route.length, i + 7); k += 1) smoothRoll(k).catch(() => {});
+    for (let k = i; k < Math.min(route.length, i + 8); k += 1) smoothRoll(k).catch(() => {});
+    for (let k = i; k < Math.min(route.length, i + 6); k += 1) farLock(k).catch(() => {});
     for (let k = i; k < Math.min(route.length - 1, i + 4); k += 1) tileVectors(k).catch(() => {});
   }
 
-  function updateHud(i, rollValue = 0) {
+  function updateHud(i, rollValue = 0, lock = null) {
     const frame = route[i];
     ui.num.textContent = `${i + 1} / ${route.length}`;
     ui.bar.style.width = `${(i + 1) / route.length * 100}%`;
     const direction = travelBearing(i);
     ui.heading.textContent = Number.isFinite(direction) ? `${Math.round(direction)}°` : '—°';
     ui.coord.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Perceptual Bridge・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
+    const confidence = lock && Number.isFinite(lock.confidence) ? `・Lock ${Math.round(lock.confidence * 100)}%` : '';
+    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Far Lock${confidence}・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
   }
 
   async function showFirst() {
     const image = await loadRender(route[0].url);
-    const roll = await smoothRoll(0);
-    const frame = createCorrectedFrame(image, 0, roll);
+    const first = await createStabilizedFrame(image, 0);
     canvasSize();
-    ctx.drawImage(frame, 0, 0);
+    ctx.drawImage(first.canvas, 0, 0);
     ui.canvas.style.opacity = '1';
-    ui.a.style.opacity = '0';
-    ui.b.style.opacity = '0';
+    ui.a.style.opacity = '0'; ui.b.style.opacity = '0';
     ui.edgeBlur?.classList.add('drive-stabilized');
     resetPerceptualBridgeVisual();
     currentImage = image;
-    updateHud(0, roll);
+    updateHud(0, first.roll, first.lock);
   }
 
   async function animatePair(i) {
     const nextImage = await loadRender(route[i + 1].url);
-    const [rollA, rollB, vectors] = await Promise.all([smoothRoll(i), smoothRoll(i + 1), tileVectors(i)]);
-    const frameA = createCorrectedFrame(currentImage, i, rollA);
-    const frameB = createCorrectedFrame(nextImage, i + 1, rollB);
-    const layersA = prepareTileLayers(frameA);
-    const layersB = prepareTileLayers(frameB);
+    const [aInfo, bInfo, vectors] = await Promise.all([
+      createStabilizedFrame(currentImage, i),
+      createStabilizedFrame(nextImage, i + 1),
+      tileVectors(i)
+    ]);
+    const frameA = aInfo.canvas, frameB = bInfo.canvas;
+    const layersA = prepareTileLayers(frameA), layersB = prepareTileLayers(frameB);
     const bridgeStrength = perceptualBridgeStrength(i);
     const duration = Math.max(88, Math.round(speedMs * .92));
     const minFrameMs = 1000 / NORMALIZE_FPS;
     const start = performance.now();
-    let lastDraw = -Infinity;
-    let finalRendered = false;
-
+    let lastDraw = -Infinity, finalRendered = false;
     await new Promise((resolve) => {
       function tick(now) {
         const t = clamp((now - start) / duration, 0, 1);
-        const mustDraw = t >= 1 || now - lastDraw >= minFrameMs;
-        if (mustDraw) {
-          const motionProgress = t;
-          setPerceptualBridgeVisual(motionProgress, bridgeStrength);
+        if (t >= 1 || now - lastDraw >= minFrameMs) {
+          setPerceptualBridgeVisual(t, bridgeStrength);
           try {
-            normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, motionProgress, bridgeStrength);
+            normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, t, bridgeStrength);
           } catch (error) {
-            console.warn('Perceptual bridge fallback', error);
-            ctx.globalAlpha = 1;
-            ctx.drawImage(frameA, 0, 0);
-            ctx.globalAlpha = motionProgress;
-            ctx.drawImage(frameB, 0, 0);
+            console.warn('Far-field flow fallback', error);
+            ctx.globalAlpha = 1; ctx.drawImage(frameA, 0, 0);
+            ctx.globalAlpha = t; ctx.drawImage(frameB, 0, 0);
             ctx.globalAlpha = 1;
           }
           lastDraw = now;
@@ -682,25 +778,23 @@
       }
       requestAnimationFrame(tick);
     });
-
     if (!finalRendered) {
       try { normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, 1, bridgeStrength); } catch {}
     }
     resetPerceptualBridgeVisual();
-    ctx.globalAlpha = 1;
-    ctx.drawImage(frameB, 0, 0);
+    ctx.globalAlpha = 1; ctx.drawImage(frameB, 0, 0);
     currentImage = nextImage;
-    updateHud(i + 1, rollB);
+    updateHud(i + 1, bInfo.roll, bInfo.lock);
   }
 
   async function play(frames) {
     const playToken = ++token;
     route = frames;
-    renderCache.clear(); corsCache.clear(); grayCache.clear(); rollRawCache.clear(); rollSmoothCache.clear(); tileCache.clear(); blendAssetCache.clear();
+    renderCache.clear(); corsCache.clear(); grayCache.clear(); farEdgeCache.clear(); rollRawCache.clear(); rollSmoothCache.clear(); correctedGrayCache.clear(); farPairCache.clear(); farLockCache.clear(); stabilizedGrayCache.clear(); tileCache.clear(); blendAssetCache.clear();
     if (!route.length) throw new Error('再生できる画像がありません');
     ui.place.textContent = route[0].sequenceId ? `Sequence #${route[0].sequenceId}` : 'KartaView route';
     await warmAhead(0);
-    await Promise.race([Promise.all([smoothRoll(0), smoothRoll(1), tileVectors(0)]), sleep(650)]);
+    await Promise.race([Promise.all([smoothRoll(0), smoothRoll(1), farLock(1), tileVectors(0)]), sleep(750)]);
     await showFirst();
     let nextAt = performance.now() + speedMs;
     for (let i = 0; i < route.length - 1 && playToken === token; i += 1) {
@@ -710,7 +804,7 @@
       if (playToken !== token) return;
       await animatePair(i);
       nextAt += speedMs;
-      if (nextAt < performance.now()) nextAt = performance.now() + Math.max(12, speedMs * .12);
+      if (nextAt < performance.now()) nextAt = performance.now() + Math.max(10, speedMs * .10);
     }
     if (playToken === token) {
       ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・再スタート`;
@@ -734,17 +828,15 @@
     if (!Array.isArray(data.frames) || data.frames.length < 2) throw new Error('連続して再生できる写真が見つかりませんでした');
     return data;
   }
-
   async function requestWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try { wake = await navigator.wakeLock.request('screen'); } catch {}
   }
-
   async function start() {
     ui.startBtn.disabled = true;
     ui.startBtn.textContent = 'ルートを準備中…';
     ui.error.hidden = true;
-    speedMs = Number(document.querySelector('input[name="driveSpeed"]:checked')?.value || 120);
+    speedMs = Number(document.querySelector('input[name="driveSpeed"]:checked')?.value || 100);
     try {
       await requestWakeLock();
       const data = await fetchRoute();
@@ -762,7 +854,6 @@
       ui.startBtn.textContent = '旅をはじめる';
     }
   }
-
   function reset() {
     token += 1;
     ui.edgeBlur?.classList.remove('drive-stabilized');
@@ -778,7 +869,7 @@
     if (document.visibilityState === 'visible' && (!wake || wake.released)) requestWakeLock();
   });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.10').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.11').catch(() => {}));
   }
   console.info(`Streetview Journey v${VERSION}`);
 })();
