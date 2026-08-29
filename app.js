@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.12 Formal 50ms Far-field Horizon Lock */
+/* Streetview Journey v0.1.13 Smooth 80ms Far-field Horizon Lock */
 (() => {
-  const VERSION = '0.1.12';
+  const VERSION = '0.1.13';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS = 4;
   const TILE_ROWS = 5;
@@ -17,7 +17,7 @@
   const TILE_OVERLAP_CSS_PX = 12;
   const ACCUM_SCALE = 0.16;
   const NORMALIZE_FPS = 36;
-  const FORMAL_50_FPS = 60;
+  const FAST_80_FPS = 60;
   const NORMALIZE_SCALE = 0.40;
   const MIN_WEIGHT_BYTE = 3;
   const BRIDGE_RADIAL_GAIN = 0.014;
@@ -56,14 +56,14 @@
     $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.12 FORMAL 50MS FAR-FIELD LOCK';
-      card.querySelector('h1').textContent = '奥の景色を固定したまま、50msを正しく比べる。';
-      card.querySelector('.lead').textContent = '時計の先送りを使わず、実時間50msでFar-field Lock・Tile Flow・Normalized Blend・Perceptual Bridgeを0.10秒と同じ処理系で比較する正式テスト版。';
+      card.querySelector('.eyebrow').textContent = 'v0.1.13 SMOOTH 80MS FAR-FIELD LOCK';
+      card.querySelector('h1').textContent = '速さを残して、パラパラ感を減らす。';
+      card.querySelector('.lead').textContent = '0.05秒を0.08秒へ変更。実時間80msの中でFar-field Lock・Tile Flow・Normalized Blend・Perceptual Bridgeを通し、描画機会を増やして連続運動として見えやすくする比較版。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Formal 50ms Far-field Lockデモ';
+        preset.querySelector('.preset-title').textContent = 'Smooth 80ms Far-field Lockデモ';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '遠景Anchor + Horizon/Vanishing Lock + 4×5 Tile Flow / 0.05・0.10・0.12秒比較';
+        preset.querySelector('small').textContent = '遠景Anchor + Horizon/Vanishing Lock + 4×5 Tile Flow / 0.08・0.10・0.12秒比較';
       }
       document.querySelector('.speed-lab')?.remove();
       const lab = document.createElement('div');
@@ -71,7 +71,7 @@
       lab.innerHTML = `
         <div class="speed-title"><strong>B 自転車・ドライブ風</strong><small>再生速度を比較</small></div>
         <div class="speed-grid">
-          <label><input type="radio" name="driveSpeed" value="50"><span>0.05秒<small>正式50ms</small></span></label>
+          <label><input type="radio" name="driveSpeed" value="80"><span>0.08秒<small>高速・滑らか</small></span></label>
           <label><input type="radio" name="driveSpeed" value="100" checked><span>0.10秒<small>標準</small></span></label>
           <label><input type="radio" name="driveSpeed" value="120"><span>0.12秒<small>比較</small></span></label>
         </div>`;
@@ -237,7 +237,7 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v0112`;
+        img.src = `${url}${sep}analysis=v0113`;
       }));
     }
     return corsCache.get(url);
@@ -755,9 +755,9 @@
     const frameA = aInfo.canvas, frameB = bInfo.canvas;
     const layersA = prepareTileLayers(frameA), layersB = prepareTileLayers(frameB);
     const bridgeStrength = perceptualBridgeStrength(i);
-    const formal50 = speedMs === 50;
-    const duration = formal50 ? 50 : Math.max(88, Math.round(speedMs * .92));
-    const minFrameMs = 1000 / (formal50 ? FORMAL_50_FPS : NORMALIZE_FPS);
+    const fast80 = speedMs === 80;
+    const duration = fast80 ? 80 : Math.max(88, Math.round(speedMs * .92));
+    const minFrameMs = 1000 / (fast80 ? FAST_80_FPS : NORMALIZE_FPS);
     const start = performance.now();
     let lastDraw = -Infinity, finalRendered = false;
     await new Promise((resolve) => {
@@ -806,7 +806,7 @@
       if (playToken !== token) return;
       await animatePair(i);
       nextAt += speedMs;
-      if (nextAt < performance.now()) nextAt = performance.now() + Math.max(6, speedMs * .10);
+      if (nextAt < performance.now()) nextAt = performance.now() + Math.max(8, speedMs * .10);
     }
     if (playToken === token) {
       ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・再スタート`;
@@ -871,7 +871,7 @@
     if (document.visibilityState === 'visible' && (!wake || wake.released)) requestWakeLock();
   });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.12').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.13').catch(() => {}));
   }
   console.info(`Streetview Journey v${VERSION}`);
 })();
