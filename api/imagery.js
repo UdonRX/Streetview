@@ -1,13 +1,87 @@
-/* Streetview Journey v0.1.6 - single Vercel Hobby Function */
-const KARTA_API = 'https://api.openstreetcam.org/2.0';
-const MAX_FRAMES = 72;
-function numberOrNull(value){ if(value===null||value===undefined||value==='')return null; const n=Number(value); return Number.isFinite(n)?n:null; }
-function extractData(json){ const data=json?.result?.data; if(Array.isArray(data))return data; if(data&&Array.isArray(data.photos))return data.photos; return []; }
-function sequenceIdOf(photo){ return String(photo?.sequenceId??photo?.sequence?.id??'').trim(); }
-function imageUrlOf(photo){ return photo?.fileurlLTh||photo?.fileurlTh||photo?.fileurlProc||photo?.fileurl||null; }
-function normalizePhoto(photo){ const url=imageUrlOf(photo); if(!url)return null; return { id:String(photo.id??photo.photoId??''), sequenceId:sequenceIdOf(photo), sequenceIndex:numberOrNull(photo.sequenceIndex), lat:numberOrNull(photo.lat??photo.matchLat), lng:numberOrNull(photo.lng??photo.matchLng), heading:numberOrNull(photo.heading), projectionYaw:numberOrNull(photo.projectionYaw), projection:photo.projection||null, fieldOfView:numberOrNull(photo.fieldOfView), url }; }
-function pickWindow(photos,anchorIndex){ const seen=new Set(); const normalized=photos.map(normalizePhoto).filter(Boolean).filter(photo=>{ const key=photo.id||photo.url||`${photo.sequenceId}:${photo.sequenceIndex}`; if(seen.has(key))return false; seen.add(key); return true; }); normalized.sort((a,b)=>(a.sequenceIndex??0)-(b.sequenceIndex??0)); if(normalized.length<=MAX_FRAMES)return normalized; let start=0; if(Number.isFinite(anchorIndex)){ const found=normalized.findIndex(p=>Number.isFinite(p.sequenceIndex)&&p.sequenceIndex>=anchorIndex); if(found>=0)start=found; } if(start+MAX_FRAMES>normalized.length)start=Math.max(0,normalized.length-MAX_FRAMES); return normalized.slice(start,start+MAX_FRAMES); }
-async function fetchJson(url){ const response=await fetch(url,{headers:{Accept:'application/json'}}); if(!response.ok)throw new Error(`KartaView upstream ${response.status}`); return response.json(); }
-async function findNearby(lat,lng,radius){ const params=new URLSearchParams({lat:String(lat),lng:String(lng),radius:String(radius),join:'sequence',orderBy:'id',orderDirection:'desc'}); const json=await fetchJson(`${KARTA_API}/photo/?${params}`); const photos=extractData(json); const candidate=photos.find(p=>sequenceIdOf(p)); if(!candidate)return null; return {sequenceId:sequenceIdOf(candidate),sequenceIndex:numberOrNull(candidate.sequenceIndex)}; }
-async function sequencePage(sequenceId,sequenceIndex){ const page=Number.isFinite(sequenceIndex)?Math.floor(Math.max(0,sequenceIndex-1)/150)+1:1; const params=new URLSearchParams({sequenceId,page:String(page),itemsPerPage:'150'}); const json=await fetchJson(`${KARTA_API}/photo/?${params}`); return extractData(json); }
-module.exports=async function handler(req,res){ res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=1800'); res.setHeader('Content-Type','application/json; charset=utf-8'); try{ if((req.query.source||'karta')!=='karta')return res.status(400).json({error:'v0.1ではKartaViewのみ有効です'}); let sequenceId=String(req.query.sequence||'').trim(); let anchorIndex=numberOrNull(req.query.index); if(!sequenceId){ const lat=Number(req.query.lat),lng=Number(req.query.lng),radius=Math.min(5000,Math.max(100,Number(req.query.radius)||1200)); if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180)return res.status(400).json({error:'有効な緯度・経度が必要です'}); const nearby=await findNearby(lat,lng,radius); if(!nearby)return res.status(404).json({error:'この周辺ではKartaViewの連続写真が見つかりませんでした'}); sequenceId=nearby.sequenceId; anchorIndex=nearby.sequenceIndex; } const photos=await sequencePage(sequenceId,anchorIndex); const frames=pickWindow(photos,anchorIndex); if(frames.length<2)return res.status(404).json({error:'再生可能な画像が不足しています'}); return res.status(200).json({version:'0.1.6',source:'KartaView',sequenceId,anchorIndex,frames}); }catch(error){ console.error('imagery route error',error); return res.status(502).json({error:'KartaViewからルートを取得できませんでした'}); } };
+/* Streetview Journey v0.1.28 - direction-aware sequence selection, single Vercel Hobby Function */
+const KARTA_API='https://api.openstreetcam.org/2.0';
+const MAX_FRAMES=72;
+const CANDIDATE_LIMIT=5;
+const PAGE_SIZE=150;
+
+function numberOrNull(value){if(value===null||value===undefined||value==='')return null;const n=Number(value);return Number.isFinite(n)?n:null;}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function median(values){const a=values.filter(Number.isFinite).sort((x,y)=>x-y);if(!a.length)return null;const m=a.length>>1;return a.length&1?a[m]:(a[m-1]+a[m])*.5;}
+function wrap180(v){return((v+540)%360)-180;}
+function extractData(json){const data=json?.result?.data;if(Array.isArray(data))return data;if(data&&Array.isArray(data.photos))return data.photos;return [];}
+function sequenceIdOf(photo){return String(photo?.sequenceId??photo?.sequence?.id??'').trim();}
+function imageUrlOf(photo){return photo?.fileurlLTh||photo?.fileurlTh||photo?.fileurlProc||photo?.fileurl||null;}
+function normalizePhoto(photo){const url=imageUrlOf(photo);if(!url)return null;return{id:String(photo.id??photo.photoId??''),sequenceId:sequenceIdOf(photo),sequenceIndex:numberOrNull(photo.sequenceIndex),lat:numberOrNull(photo.lat??photo.matchLat),lng:numberOrNull(photo.lng??photo.matchLng),heading:numberOrNull(photo.heading),projectionYaw:numberOrNull(photo.projectionYaw),projection:photo.projection||null,fieldOfView:numberOrNull(photo.fieldOfView),url};}
+function hasCoords(p){return Number.isFinite(p?.lat)&&Number.isFinite(p?.lng);}
+function distanceMeters(a,b){if(!hasCoords(a)||!hasCoords(b))return Infinity;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dp=(b.lat-a.lat)*r,dl=(b.lng-a.lng)*r,s=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 12742000*Math.atan2(Math.sqrt(s),Math.sqrt(Math.max(0,1-s)));}
+function bearing(a,b){if(!hasCoords(a)||!hasCoords(b))return null;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lng-a.lng)*r,y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)/r+360)%360;}
+function headingOf(p){return Number.isFinite(p?.heading)?p.heading:(Number.isFinite(p?.projectionYaw)?p.projectionYaw:null);}
+
+function normalizeList(photos){const seen=new Set();const out=[];for(const raw of photos){const p=normalizePhoto(raw);if(!p)continue;const key=p.id||p.url||`${p.sequenceId}:${p.sequenceIndex}`;if(seen.has(key))continue;seen.add(key);out.push(p);}out.sort((a,b)=>(a.sequenceIndex??0)-(b.sequenceIndex??0));return out;}
+function anchorPosition(photos,anchorIndex){if(!photos.length)return 0;if(Number.isFinite(anchorIndex)){const exact=photos.findIndex(p=>Number.isFinite(p.sequenceIndex)&&p.sequenceIndex>=anchorIndex);if(exact>=0)return exact;}return 0;}
+function evaluationWindow(photos,anchorIndex){const normalized=normalizeList(photos);if(normalized.length<=MAX_FRAMES)return normalized;const at=anchorPosition(normalized,anchorIndex),start=clamp(at-Math.floor(MAX_FRAMES*.35),0,normalized.length-MAX_FRAMES);return normalized.slice(start,start+MAX_FRAMES);}
+function playbackWindow(photos,anchorIndex,direction){const normalized=normalizeList(photos);if(!normalized.length)return[];const at=anchorPosition(normalized,anchorIndex);if(direction==='reverse'){let end=Math.min(normalized.length,at+1),start=Math.max(0,end-MAX_FRAMES);if(end-start<2){end=normalized.length;start=Math.max(0,end-MAX_FRAMES);}return normalized.slice(start,end).reverse();}let start=Math.min(Math.max(0,at),Math.max(0,normalized.length-1)),end=Math.min(normalized.length,start+MAX_FRAMES);if(end-start<2){start=Math.max(0,normalized.length-MAX_FRAMES);end=normalized.length;}return normalized.slice(start,end);}
+
+function localBearing(frames,i){const a=frames[i];if(!a)return null;let sx=0,sy=0,sw=0;for(let s=1;s<=7&&i+s<frames.length;s++){const b=frames[i+s],d=distanceMeters(a,b);if(!Number.isFinite(d)||d<.8)continue;const br=bearing(a,b),w=Math.min(d,18)/(1+.35*(s-1));sx+=Math.cos(br*Math.PI/180)*w;sy+=Math.sin(br*Math.PI/180)*w;sw+=w;if(d>=20)break;}if(!sw)return null;return(Math.atan2(sy,sx)*180/Math.PI+360)%360;}
+function alignmentStats(frames){
+  const fwd=[],rev=[],stepDistances=[];let headingSamples=0,geometrySamples=0;
+  for(let i=0;i<frames.length-1;i++){
+    const d=distanceMeters(frames[i],frames[i+1]);if(Number.isFinite(d)&&d<80)stepDistances.push(d);
+    const br=localBearing(frames,i);if(!Number.isFinite(br))continue;geometrySamples++;
+    const hd=headingOf(frames[i]);if(!Number.isFinite(hd))continue;headingSamples++;
+    fwd.push(Math.abs(wrap180(hd-br)));rev.push(Math.abs(wrap180(hd-((br+180)%360))));
+  }
+  const fwdErr=median(fwd),revErr=median(rev),hasHeading=Number.isFinite(fwdErr)&&Number.isFinite(revErr);
+  const direction=hasHeading&&revErr+7<fwdErr?'reverse':'forward';
+  const error=hasHeading?(direction==='reverse'?revErr:fwdErr):null;
+  const headingCoverage=geometrySamples?headingSamples/geometrySamples:0;
+  const medianStep=median(stepDistances);
+  const moving=stepDistances.filter(d=>d>=.35&&d<=45).length/Math.max(1,stepDistances.length);
+  const orientationScore=hasHeading?clamp(1-error/95,0,1):.46;
+  const continuityScore=clamp((frames.length-18)/54,0,1)*.55+clamp(moving,0,1)*.45;
+  return{direction,alignmentErrorDeg:error,forwardErrorDeg:fwdErr,reverseErrorDeg:revErr,headingCoverage,orientationScore,continuityScore,medianStepMeters:medianStep,geometrySamples,headingSamples};
+}
+
+async function fetchJson(url){const response=await fetch(url,{headers:{Accept:'application/json'}});if(!response.ok)throw new Error(`KartaView upstream ${response.status}`);return response.json();}
+async function nearbyCandidates(lat,lng,radius){
+  const params=new URLSearchParams({lat:String(lat),lng:String(lng),radius:String(radius),join:'sequence',orderBy:'id',orderDirection:'desc',page:'1',itemsPerPage:'100'});
+  const json=await fetchJson(`${KARTA_API}/photo/?${params}`),raw=extractData(json),bySeq=new Map(),target={lat,lng};
+  for(const photo of raw){const sequenceId=sequenceIdOf(photo);if(!sequenceId)continue;const p=normalizePhoto(photo);if(!p)continue;const dist=distanceMeters(target,p);const prev=bySeq.get(sequenceId);if(!prev||dist<prev.distance)bySeq.set(sequenceId,{sequenceId,sequenceIndex:p.sequenceIndex,distance:dist,photo:p});}
+  return[...bySeq.values()].sort((a,b)=>a.distance-b.distance).slice(0,CANDIDATE_LIMIT);
+}
+async function sequencePage(sequenceId,sequenceIndex){const page=Number.isFinite(sequenceIndex)?Math.floor(Math.max(0,sequenceIndex-1)/PAGE_SIZE)+1:1,params=new URLSearchParams({sequenceId,page:String(page),itemsPerPage:String(PAGE_SIZE)}),json=await fetchJson(`${KARTA_API}/photo/?${params}`);return extractData(json);}
+async function evaluateCandidate(candidate,radius){
+  try{
+    const photos=await sequencePage(candidate.sequenceId,candidate.sequenceIndex),evalFrames=evaluationWindow(photos,candidate.sequenceIndex);if(evalFrames.length<2)return null;
+    const alignment=alignmentStats(evalFrames),proximityScore=clamp(1-candidate.distance/Math.max(radius,1),0,1),headingReliability=clamp(alignment.headingCoverage/.55,0,1);
+    const directionScore=alignment.orientationScore*(.55+.45*headingReliability),score=.48*directionScore+.24*proximityScore+.20*alignment.continuityScore+.08*clamp(evalFrames.length/MAX_FRAMES,0,1);
+    const frames=playbackWindow(photos,candidate.sequenceIndex,alignment.direction);
+    return{...candidate,photos,frames,alignment,score,proximityScore};
+  }catch{return null;}
+}
+async function selectNearbyRoute(lat,lng,radius){
+  const candidates=await nearbyCandidates(lat,lng,radius);if(!candidates.length)return null;
+  const evaluated=(await Promise.all(candidates.map(c=>evaluateCandidate(c,radius)))).filter(Boolean).filter(c=>c.frames.length>=2);
+  if(!evaluated.length)return null;
+  evaluated.sort((a,b)=>b.score-a.score);
+  const best=evaluated[0];
+  return{sequenceId:best.sequenceId,anchorIndex:best.sequenceIndex,frames:best.frames,selection:{strategy:'direction-aware',direction:best.alignment.direction,alignmentErrorDeg:best.alignment.alignmentErrorDeg,forwardErrorDeg:best.alignment.forwardErrorDeg,reverseErrorDeg:best.alignment.reverseErrorDeg,headingCoverage:best.alignment.headingCoverage,medianStepMeters:best.alignment.medianStepMeters,score:best.score,proximityMeters:best.distance,candidateCount:evaluated.length,candidates:evaluated.slice(0,5).map(c=>({sequenceId:c.sequenceId,direction:c.alignment.direction,alignmentErrorDeg:c.alignment.alignmentErrorDeg,headingCoverage:c.alignment.headingCoverage,score:c.score,proximityMeters:c.distance,frames:c.frames.length}))}};
+}
+
+module.exports=async function handler(req,res){
+  res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=1800');res.setHeader('Content-Type','application/json; charset=utf-8');
+  try{
+    if((req.query.source||'karta')!=='karta')return res.status(400).json({error:'v0.1ではKartaViewのみ有効です'});
+    let sequenceId=String(req.query.sequence||'').trim(),anchorIndex=numberOrNull(req.query.index),frames=null,selection={strategy:'fixed',direction:'forward',alignmentErrorDeg:null,headingCoverage:0,score:null,candidateCount:1};
+    if(!sequenceId){
+      const lat=Number(req.query.lat),lng=Number(req.query.lng),radius=Math.min(5000,Math.max(100,Number(req.query.radius)||1200));
+      if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180)return res.status(400).json({error:'有効な緯度・経度が必要です'});
+      const nearby=await selectNearbyRoute(lat,lng,radius);if(!nearby)return res.status(404).json({error:'この周辺では進行方向を確認できるKartaViewの連続写真が見つかりませんでした'});
+      sequenceId=nearby.sequenceId;anchorIndex=nearby.anchorIndex;frames=nearby.frames;selection=nearby.selection;
+    }else{
+      const photos=await sequencePage(sequenceId,anchorIndex);frames=playbackWindow(photos,anchorIndex,'forward');
+    }
+    if(!Array.isArray(frames)||frames.length<2)return res.status(404).json({error:'再生可能な画像が不足しています'});
+    return res.status(200).json({version:'0.1.28',source:'KartaView',sequenceId,anchorIndex,selection,frames});
+  }catch(error){console.error('imagery route error',error);return res.status(502).json({error:'KartaViewからルートを取得できませんでした'});}
+};
