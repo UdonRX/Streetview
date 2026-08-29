@@ -124,7 +124,13 @@
     })();
     workerPairCache.set(i,p);return p;
   }
-  function routeMotion(i,out,wp,weight){diag.lastMotionRoute={frame:i,source:out.source,weight,workerConfidence:wp.confidence,safetyFactor:Number.isFinite(wp.safetyFactor)?wp.safetyFactor:1,safetyFlags:wp.safetyFlags||''};return out;}
+  function routeMotion(i,out,wp,weight){
+    const ransacWeight=clamp(Number.isFinite(weight)?weight:0,0,1),farFieldWeight=1-ransacWeight;
+    const applied={frame:i,workerSource:wp?.source||'unknown',appliedSource:out?.source||'unknown',ransacWeight,farFieldWeight,workerConfidence:Number.isFinite(wp?.confidence)?wp.confidence:0,safetyFactor:Number.isFinite(wp?.safetyFactor)?wp.safetyFactor:1,safetyFlags:wp?.safetyFlags||'',appliedDx:Number.isFinite(out?.dx)?out.dx:0,appliedDy:Number.isFinite(out?.dy)?out.dy:0,appliedRoll:Number.isFinite(out?.roll)?out.roll:0,appliedLogScale:Number.isFinite(out?.logScale)?out.logScale:0,appliedConfidence:Number.isFinite(out?.confidence)?out.confidence:0};
+    diag.lastMotionRoute=applied;
+    try{window.dispatchEvent(new CustomEvent('journey-applied-motion',{detail:{...applied}}));}catch{}
+    return out;
+  }
   async function motionPair(i){
     if(motionPairCache.has(i))return motionPairCache.get(i);
     const p=(async()=>{
