@@ -8,75 +8,41 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/styles.css?v=0.1.4" />
-  <title>Streetview Journey v0.1.4</title>
+  <link rel="stylesheet" href="/styles.css?v=0.1.6" />
+  <title>Streetview Journey v0.1.6</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.4 Smooth Motion -->
+  <!-- Streetview Journey v0.1.6 Stabilized Tile Flow -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
       <img id="layerB" class="scene-layer" alt="" decoding="async" draggable="false" />
       <div class="vignette"></div>
       <div class="motion-blur"></div>
-
-      <header class="top-hud">
-        <span class="brand">STREETVIEW JOURNEY</span>
-        <span id="sourceBadge" class="badge">KartaView</span>
-      </header>
-
+      <header class="top-hud"><span class="brand">STREETVIEW JOURNEY</span><span id="sourceBadge" class="badge">KartaView</span></header>
       <section class="bottom-hud">
-        <div class="location-row">
-          <span id="placeLabel">Demo route</span>
-          <span id="frameLabel">0 / 0</span>
-        </div>
+        <div class="location-row"><span id="placeLabel">Demo route</span><span id="frameLabel">0 / 0</span></div>
         <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        <div class="meta-row">
-          <span id="headingLabel">—°</span>
-          <span id="networkLabel">0.5秒・Smooth Motion</span>
-          <span id="coordLabel">—</span>
-        </div>
+        <div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">B・Stabilized Tile Flow</span><span id="coordLabel">—</span></div>
       </section>
     </section>
-
     <section id="startPanel" class="start-panel">
       <div class="start-card">
-        <p class="eyebrow">v0.1.4 SMOOTH MOTION</p>
-        <h1>画面を見るだけの旅。</h1>
-        <p class="lead">80msの短いブレンド、微ブラー、前進ズーム、フレーム位置合わせで「写真が切り替わる感」を抑えるテスト版。</p>
-
-        <div class="preset-card">
-          <span class="preset-title">Smooth Motionデモ</span>
-          <strong>Jakarta / KartaView sample sequence</strong>
-          <small>sequence #6187609 / index 650付近から連続72枚</small>
-        </div>
-
+        <p class="eyebrow">v0.1.6 STABILIZED TILE FLOW</p>
+        <h1>酔いにくいドライブ映像へ。</h1>
+        <p class="lead">Bモードを水平化し、近景と遠景を別々にワープさせるタイル型Flowのテスト版。</p>
+        <div class="preset-card"><span class="preset-title">Stabilized Tile Flowデモ</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
         <details class="custom-route">
           <summary>緯度・経度から探す</summary>
-          <div class="coord-inputs">
-            <label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label>
-            <label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label>
-          </div>
-          <label class="toggle-row">
-            <input id="useCoordinates" type="checkbox" />
-            <span>この座標付近のsequenceを自動検索</span>
-          </label>
+          <div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label><label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label></div>
+          <label class="toggle-row"><input id="useCoordinates" type="checkbox" /><span>この座標付近のsequenceを自動検索</span></label>
         </details>
-
         <button id="startButton" class="start-button" type="button">旅をはじめる</button>
         <p class="fineprint">開始後は操作不要。Wake Lockが使える環境では画面スリープを防止する。</p>
       </div>
     </section>
-
-    <section id="errorPanel" class="error-panel" hidden>
-      <div class="error-card">
-        <strong>旅を開始できなかった</strong>
-        <p id="errorMessage"></p>
-        <button id="retryButton" type="button">もう一度</button>
-      </div>
-    </section>
+    <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
-
-  <script src="/app.js?v=0.1.4" defer></script>
+  <script src="/app.js?v=0.1.6" defer></script>
 </body>
 </html>
