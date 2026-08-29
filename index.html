@@ -9,10 +9,10 @@
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css?v=0.1.6" />
-  <title>Streetview Journey v0.1.11</title>
+  <title>Streetview Journey v0.1.11 Speed Compare</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.11 Far-field Horizon Lock -->
+  <!-- Streetview Journey v0.1.11 Far-field Horizon Lock / 0.05s Speed Compare -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
@@ -43,6 +43,40 @@
     </section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
+  <script>
+    (() => {
+      const nativeRAF = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (callback) => nativeRAF((timestamp) => {
+        const isUltraFast = document.querySelector('input[name="driveSpeed"]:checked')?.value === '50';
+        callback(isUltraFast ? timestamp + 38 : timestamp);
+      });
+
+      document.addEventListener('DOMContentLoaded', () => {
+        const grid = document.querySelector('.speed-grid');
+        if (!grid) return;
+        const labels = [...grid.querySelectorAll('label')];
+        const normal = labels.find((label) => label.querySelector('input')?.value === '100');
+        const relaxed = labels.find((label) => label.querySelector('input')?.value === '120');
+        const fast = labels.find((label) => label.querySelector('input')?.value === '150');
+
+        if (fast) {
+          const input = fast.querySelector('input');
+          input.value = '50';
+          input.checked = false;
+          fast.querySelector('span').innerHTML = '0.05秒<small>高速</small>';
+        }
+        if (normal) {
+          normal.querySelector('input').checked = true;
+          normal.querySelector('span').innerHTML = '0.10秒<small>標準</small>';
+        }
+        if (relaxed) {
+          relaxed.querySelector('input').checked = false;
+          relaxed.querySelector('span').innerHTML = '0.12秒<small>比較</small>';
+        }
+        if (fast && normal && relaxed) grid.replaceChildren(fast, normal, relaxed);
+      });
+    })();
+  </script>
   <script src="/app.js?v=0.1.11" defer></script>
 </body>
 </html>
