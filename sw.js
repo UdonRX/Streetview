@@ -1,7 +1,7 @@
-/* Streetview Journey Phase 3/4 fast route shell */
-const SHELL_CACHE='streetview-shell-phase4-route-fast-v1';
+/* Streetview Journey Phase 3/4 progressive route shell */
+const SHELL_CACHE='streetview-shell-phase4-route-stream-v2';
 const IMAGE_CACHE='streetview-images-v0.1.0';
-const SHELL=['/','/index.html','/map.css','/phase3.css?v=0.3.1','/phase3-fast.js?v=0.3.1','/map.js?v=0.3.1','/phase4-route-fast.js?v=0.4.2','/journey.html','/journey-map.html','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.30','/travel-axis-worker.js?v=0.1.30','/app.js?v=0.1.30','/diagnostics.js?v=0.1.30','/motion-worker.js?v=0.1.25','/manifest.webmanifest'];
+const SHELL=['/','/index.html','/map.css','/phase3.css?v=0.3.1','/phase3-fast.js?v=0.3.1','/map.js?v=0.3.1','/phase4-route.js?v=0.4.4','/journey.html','/journey-map.html','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.30','/travel-axis-worker.js?v=0.1.30','/app.js?v=0.1.30','/diagnostics.js?v=0.1.30','/motion-worker.js?v=0.1.25','/manifest.webmanifest'];
 const IMAGE_LIMIT=160;
 const PASSTHROUGH_HOSTS=new Set(['tiles.openfreemap.org','api.openstreetcam.org','tiles.mapillary.com','graph.mapillary.com','overpass-api.de','ja.wikipedia.org','wikimedia.org','upload.wikimedia.org']);
 self.addEventListener('install',event=>{event.waitUntil(caches.open(SHELL_CACHE).then(cache=>cache.addAll(SHELL)));self.skipWaiting();});

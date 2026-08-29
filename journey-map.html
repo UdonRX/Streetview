@@ -24,31 +24,35 @@
       <p class="eyebrow">PHASE 2 MAP JOURNEY</p><h1>選んだ撮影済みルートを再生する。</h1><p class="lead" id="selectedRouteLead">地図で選択したsequenceをJourney Engineへ接続する。</p>
       <div class="preset-card"><span class="preset-title">地図から選択</span><strong id="selectedRouteName">ルートを読み込み中</strong><small id="selectedRouteMeta">—</small></div>
       <details class="custom-route"><summary>緯度・経度</summary><div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="0" /></label><label>経度<input id="lngInput" inputmode="decimal" value="0" /></label></div><label class="toggle-row"><input id="useCoordinates" type="checkbox" /><span>座標検索</span></label></details>
-      <button id="startButton" class="start-button" type="button">このルートで旅をはじめる</button><p class="fineprint">Phase 1の傾き補正・Motion Worker・Visual Headingをそのまま使用する。</p>
+      <button id="startButton" class="start-button" type="button">このルートで旅をはじめる</button><p class="fineprint">先頭画像から開始し、残りは再生中にバックグラウンド取得する。</p>
     </div></section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
   <script>
   (()=>{
-    const KEY='streetview:journey-route';
+    const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com',CHUNK=32;
     let selected=null;try{selected=JSON.parse(sessionStorage.getItem(KEY)||'null');}catch{}
     const nativeFetch=window.fetch.bind(window);
-    window.fetch=(input,init)=>{const url=typeof input==='string'?input:input?.url||'';if(selected&&url.includes('/api/imagery'))return Promise.resolve(new Response(JSON.stringify(selected),{status:200,headers:{'Content-Type':'application/json'}}));return nativeFetch(input,init);};
+    window.fetch=(input,init)=>{const url=typeof input==='string'?input:input?.url||'';if(selected&&url.includes('/api/imagery'))return Promise.resolve({ok:true,status:200,json:async()=>selected});return nativeFetch(input,init);};
     window.__journeyValidationRoute=selected?{id:'map-selected',name:selected.provider||selected.source||'Selected',kind:'地図選択',mode:'fixed',sequenceId:selected.sequenceId||null,lat:selected.frames?.[0]?.lat??null,lng:selected.frames?.[0]?.lng??null}:null;
+    const token=()=>{try{return localStorage.getItem(TOKEN_KEY)||''}catch{return''}};
+    async function api(id){const t=token();if(!t)throw new Error('Mapillary token missing');const r=await nativeFetch(`${GRAPH}/${encodeURIComponent(id)}?fields=id,sequence,captured_at,computed_geometry,compass_angle,thumb_2048_url,is_pano`,{headers:{Authorization:`OAuth ${t}`}}),j=await r.json().catch(()=>({}));if(!r.ok||j?.error)throw new Error(j?.error?.message||String(r.status));return j}
+    async function pmap(items,limit,fn){const out=new Array(items.length);let n=0;async function w(){for(;;){const i=n++;if(i>=items.length)return;try{out[i]=await fn(items[i],i)}catch{out[i]=null}}}await Promise.all(Array.from({length:Math.min(limit,items.length||1)},w));return out}
+    function frame(m,r){const c=m?.computed_geometry?.coordinates;if(!Array.isArray(c)||c.length<2||!m?.thumb_2048_url)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,url:m.thumb_2048_url,provider:'Mapillary',capturedAt:m.captured_at||null}}
+    async function continueStream(){if(!selected||selected.provider!=='Mapillary'||!Array.isArray(selected.streamPending)||!selected.streamPending.length)return;selected.streamOpen=true;const net=document.getElementById('networkLabel');while(selected.streamPending.length){const refs=selected.streamPending.slice(0,CHUNK),meta=await pmap(refs,16,r=>api(r.id)),frames=meta.map((m,i)=>frame(m,refs[i])).filter(Boolean);selected.streamPending.splice(0,refs.length);selected.frames.push(...frames);if(net)net.textContent=`続きを準備中 ${selected.frames.length}/${selected.frames.length+selected.streamPending.length}`;await new Promise(r=>setTimeout(r,0))}selected.streamOpen=false;try{sessionStorage.setItem(KEY,JSON.stringify(selected))}catch{}}
     window.addEventListener('DOMContentLoaded',()=>{
       const provider=selected?.provider||selected?.source||'Coverage';
       const count=Array.isArray(selected?.frames)?selected.frames.length:0;
-      const seq=selected?.sequenceId||'—';
+      const total=count+(selected?.streamPending?.length||0),seq=selected?.sequenceId||'—';
       const badge=document.getElementById('sourceBadge');if(badge)badge.textContent=provider;
-      const name=document.getElementById('selectedRouteName');if(name)name.textContent=`${provider} / Sequence ${seq}`;
-      const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=`${count}枚の連続画像`;
-      const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
-      if(provider==='Mapillary'){
-        const hud=document.querySelector('.top-hud');if(hud&&!document.getElementById('mapillaryAttribution')){const a=document.createElement('a');a.id='mapillaryAttribution';a.href='https://www.mapillary.com/';a.target='_blank';a.rel='noopener';a.textContent='© Mapillary';a.style.cssText='margin-left:8px;color:#fff;font-size:9px;text-decoration:none;opacity:.82';hud.appendChild(a);}
-      }
+      const name=document.getElementById('selectedRouteName');if(name)name.textContent=`${provider} / ${selected?.sequenceIds?.length>1?selected.sequenceIds.length+' sequences':'Sequence '+seq}`;
+      const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=selected?.streamPending?.length?`${count}枚準備済み / 全${total}枚予定`:`${count}枚の連続画像`;
+      const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?.streamPending?.length?'先頭画像ですぐ開始。残りは再生中に取得する。':selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
+      if(provider==='Mapillary'){const hud=document.querySelector('.top-hud');if(hud&&!document.getElementById('mapillaryAttribution')){const a=document.createElement('a');a.id='mapillaryAttribution';a.href='https://www.mapillary.com/';a.target='_blank';a.rel='noopener';a.textContent='© Mapillary';a.style.cssText='margin-left:8px;color:#fff;font-size:9px;text-decoration:none;opacity:.82';hud.appendChild(a);}}
       if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね';}}
       else if(new URLSearchParams(location.search).get('autostart')==='1')setTimeout(()=>document.getElementById('startButton')?.click(),180);
       const back=document.getElementById('journeyBack');if(back)back.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();location.href='/';},true);
+      continueStream().catch(()=>{selected.streamOpen=false;});
     });
   })();
   </script>
