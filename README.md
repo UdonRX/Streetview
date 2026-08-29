@@ -1,30 +1,32 @@
 # Streetview Journey
 
-Current version: **v0.1.28 Phase 1.5 Direction-aware Travel Axis**
+Current version: **v0.1.29 Phase 1.6 Visual Heading Calibration**
 
 iPhone Safari/PWA向け、Mapillary / KartaViewに画像が存在する道路・登山道・山・海岸・名所・展望地などを「そこへ向かって進んでいる」ように見せる Journey Engine を開発するプロジェクト。
 
-## v0.1.28 Phase 1.5 — Direction-aware Travel Axis
+## v0.1.29 Phase 1.6 — Visual Heading Calibration
 - 0.08秒をJourney Engineの標準速度として維持
-- 既存のjsfeat Motion Worker / Similarity RANSAC / Safety Gate / Far-field / Tile Flow / edge-fillを維持
-- **座標検索時に「近いsequenceを最初に採用」する方式を廃止**。周辺の最大5 sequenceを比較し、GPS軌跡とKartaView画像headingの向きが最も一致する写真列を選ぶ
-- sequenceの撮影向きがGPS進行方向と約180°反対なら、画像列を反転して「カメラが向いている方向へ旅が進む」ようにする
-- sequence選択では進行方向一致度、heading coverage、座標からの距離、フレーム連続性を合成して評価する
-- APIレスポンスへ `selection` を追加し、採用sequence、forward/reverse、heading誤差、候補数、候補scoreを診断可能にする
-- v0.1.27でSinaiaログが `Travel Axis results 1 / errors 70` だったため、Travel Axis Workerから2つ目のjsfeat解析を除去
-- 新Travel Axis Workerは **80×120 grayscaleの純JavaScript Tile Flow** で粗い動き場を作り、median translationを除いた残差からFOEを推定する。外部CDN/WASM依存なし
-- FOEが成立しないside-looking画像は横flowから画面外Travel Axisを補助推定。解析不能でも例外にせずconfidence 0でmetadata中心化へ戻る
-- Travel AxisはGPS/headingの絶対中心化を基準にし、Tile Flowは残差補正だけを担当。Camera Path X補正の78%相殺も維持
-- Workerが失敗してもmetadata中心化 + Far-field fail-softでJourneyは停止しない
+- v0.1.28のDirection-aware sequence選択、jsfeat Motion Worker、Similarity RANSAC、Safety Gate、Far-field、Tile Flow、edge-fillを維持
+- **KartaViewのheadingを「画像内で進行方向が存在するX位置」として盲信しない**。heading/GPSは初期推定とfallbackに限定する
+- APIレスポンスへ画像 `width / height` を保持し、画像座標とportrait crop座標を混同しないための基礎情報を追加
+- 座標検索では上位3 candidate sequenceを返し、まずmetadata最上位をフル画像でVisual Preflight。進行軸が画像端/外に寄る場合だけ他候補も解析し、metadata scoreとvisual scoreを合成して自動fallbackする
+- Journey開始前に最大8組の画像ペアをフル画像のまま低解像度解析し、FOE（進行軸）を画像全幅の座標系で推定する
+- フル画像FOEと既存のportrait解析結果を、confidence / coverage / inlier / errorで重み付けしてroute単位の **camera yaw bias** を自己校正する
+- metadata中心とVisual Axisが継続的にずれるsequenceでは `visual-calibrated` に切り替え、フレームごとのlocal biasでカーブにも追従する
+- 横向き撮影ではglobal translation優勢を検出し、通常FOEより `side-flow` を優先できるようTravel Axis Workerを強化
+- residual FOEとfull-flow FOEが大きく食い違う場合はconfidenceを下げ、一方の誤推定を絶対中心として使わない
+- 進行軸が画像外と推定された場合は `visual-edge-limit` として画像端まで寄せ、生成できない画角を無理に捏造しない
+- Travel Axisの診断にFull解析数、camera yaw bias、calibration confidence、metadata→effective anchor、edge-limitを追加
 - Vercel Functionは `api/imagery.js` 1個のまま。Function追加なし
 
-## Sinaia v0.1.27ログから確定した原因
-- Camera Motion側は71/71 Worker resultを返していた一方、Travel Axis専用Workerは **71ペア中1件だけ成功、70件エラー**。そのため `appliedShift=0` で、進行方向補正は実質動作していなかった
-- さらに旧 `findNearby()` は最初に見つかったsequence IDを無条件採用しており、カメラが進行方向を向くsequenceか、横/後ろ向きsequenceかを判定していなかった
-- 静止画cropだけでは画像の外側にある進行方向を生成できないため、**画像処理より前に正しい向きのsequenceを選ぶこと**をPhase 1の必須条件に変更
+## v0.1.28で解決したこと / Constanțaで残った原因
+- v0.1.28では近いsequenceを無条件採用せず、最大5候補からGPS軌跡とheadingの整合性でsequenceとforward/reverseを選ぶようにした。Sinaiaでは `alignmentErrorDeg 3.55°` のsequence #3024を選択でき、進行方向が正面になった
+- Constanțaではsequence #1937977自体のGPS/heading整合性は `16.48°` と許容範囲だったが、実画像は進行方向を正面に捉えていなかった。つまり **sequence選択が正しくても、headingメタデータだけでは画像内の光学的な正面位置を保証できない**
+- さらに旧Travel Axisは、portraitにcrop済みの80×120画像で得たFOEの `centerX` をフル画像のmetadata anchorと直接比較していた。これは座標系が異なり、横向き画像ほど補正量を誤る
+- v0.1.29では「sequenceの進む向き」と「画像内の進行軸」を分離し、前者はGPS/heading、後者はフル画像Visual Axisで決める
 
 ## Roadmap
-1. Phase 1: 0.08秒 Camera Stabilization + Direction-aware Travel Axis
+1. Phase 1: 0.08秒 Camera Stabilization + Direction-aware / Visual-calibrated Travel Axis
 2. Phase 2: MapLibre + OpenFreeMap + Mapillary/KartaView実データ地図UI
 3. Phase 3: Overpass + Wikipedia/Wikimediaによる到着地選択
 4. Phase 4: Journey Graph / 出発地 / 距離 / 所要時間 / 出発・到着時刻

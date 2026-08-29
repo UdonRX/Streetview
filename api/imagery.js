@@ -1,4 +1,4 @@
-/* Streetview Journey v0.1.28 - direction-aware sequence selection, single Vercel Hobby Function */
+/* Streetview Journey v0.1.29 - direction-aware sequence selection + visual-calibration metadata, single Vercel Hobby Function */
 const KARTA_API='https://api.openstreetcam.org/2.0';
 const MAX_FRAMES=72;
 const CANDIDATE_LIMIT=5;
@@ -11,7 +11,7 @@ function wrap180(v){return((v+540)%360)-180;}
 function extractData(json){const data=json?.result?.data;if(Array.isArray(data))return data;if(data&&Array.isArray(data.photos))return data.photos;return [];}
 function sequenceIdOf(photo){return String(photo?.sequenceId??photo?.sequence?.id??'').trim();}
 function imageUrlOf(photo){return photo?.fileurlLTh||photo?.fileurlTh||photo?.fileurlProc||photo?.fileurl||null;}
-function normalizePhoto(photo){const url=imageUrlOf(photo);if(!url)return null;return{id:String(photo.id??photo.photoId??''),sequenceId:sequenceIdOf(photo),sequenceIndex:numberOrNull(photo.sequenceIndex),lat:numberOrNull(photo.lat??photo.matchLat),lng:numberOrNull(photo.lng??photo.matchLng),heading:numberOrNull(photo.heading),projectionYaw:numberOrNull(photo.projectionYaw),projection:photo.projection||null,fieldOfView:numberOrNull(photo.fieldOfView),url};}
+function normalizePhoto(photo){const url=imageUrlOf(photo);if(!url)return null;return{id:String(photo.id??photo.photoId??''),sequenceId:sequenceIdOf(photo),sequenceIndex:numberOrNull(photo.sequenceIndex),lat:numberOrNull(photo.lat??photo.matchLat),lng:numberOrNull(photo.lng??photo.matchLng),heading:numberOrNull(photo.heading),projectionYaw:numberOrNull(photo.projectionYaw),projection:photo.projection||null,fieldOfView:numberOrNull(photo.fieldOfView),width:numberOrNull(photo.width),height:numberOrNull(photo.height),url};}
 function hasCoords(p){return Number.isFinite(p?.lat)&&Number.isFinite(p?.lng);}
 function distanceMeters(a,b){if(!hasCoords(a)||!hasCoords(b))return Infinity;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dp=(b.lat-a.lat)*r,dl=(b.lng-a.lng)*r,s=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 12742000*Math.atan2(Math.sqrt(s),Math.sqrt(Math.max(0,1-s)));}
 function bearing(a,b){if(!hasCoords(a)||!hasCoords(b))return null;const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lng-a.lng)*r,y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)/r+360)%360;}
@@ -65,23 +65,24 @@ async function selectNearbyRoute(lat,lng,radius){
   if(!evaluated.length)return null;
   evaluated.sort((a,b)=>b.score-a.score);
   const best=evaluated[0];
-  return{sequenceId:best.sequenceId,anchorIndex:best.sequenceIndex,frames:best.frames,selection:{strategy:'direction-aware',direction:best.alignment.direction,alignmentErrorDeg:best.alignment.alignmentErrorDeg,forwardErrorDeg:best.alignment.forwardErrorDeg,reverseErrorDeg:best.alignment.reverseErrorDeg,headingCoverage:best.alignment.headingCoverage,medianStepMeters:best.alignment.medianStepMeters,score:best.score,proximityMeters:best.distance,candidateCount:evaluated.length,candidates:evaluated.slice(0,5).map(c=>({sequenceId:c.sequenceId,direction:c.alignment.direction,alignmentErrorDeg:c.alignment.alignmentErrorDeg,headingCoverage:c.alignment.headingCoverage,score:c.score,proximityMeters:c.distance,frames:c.frames.length}))}};
+  const candidateRoutes=evaluated.slice(0,3).map(c=>({sequenceId:c.sequenceId,anchorIndex:c.sequenceIndex,direction:c.alignment.direction,score:c.score,alignmentErrorDeg:c.alignment.alignmentErrorDeg,proximityMeters:c.distance,frames:c.frames}));
+  return{sequenceId:best.sequenceId,anchorIndex:best.sequenceIndex,frames:best.frames,candidateRoutes,selection:{strategy:'direction-aware',direction:best.alignment.direction,alignmentErrorDeg:best.alignment.alignmentErrorDeg,forwardErrorDeg:best.alignment.forwardErrorDeg,reverseErrorDeg:best.alignment.reverseErrorDeg,headingCoverage:best.alignment.headingCoverage,medianStepMeters:best.alignment.medianStepMeters,score:best.score,proximityMeters:best.distance,candidateCount:evaluated.length,candidates:evaluated.slice(0,5).map(c=>({sequenceId:c.sequenceId,direction:c.alignment.direction,alignmentErrorDeg:c.alignment.alignmentErrorDeg,headingCoverage:c.alignment.headingCoverage,score:c.score,proximityMeters:c.distance,frames:c.frames.length}))}};
 }
 
 module.exports=async function handler(req,res){
   res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=1800');res.setHeader('Content-Type','application/json; charset=utf-8');
   try{
     if((req.query.source||'karta')!=='karta')return res.status(400).json({error:'v0.1ではKartaViewのみ有効です'});
-    let sequenceId=String(req.query.sequence||'').trim(),anchorIndex=numberOrNull(req.query.index),frames=null,selection={strategy:'fixed',direction:'forward',alignmentErrorDeg:null,headingCoverage:0,score:null,candidateCount:1};
+    let sequenceId=String(req.query.sequence||'').trim(),anchorIndex=numberOrNull(req.query.index),frames=null,candidateRoutes=[],selection={strategy:'fixed',direction:'forward',alignmentErrorDeg:null,headingCoverage:0,score:null,candidateCount:1};
     if(!sequenceId){
       const lat=Number(req.query.lat),lng=Number(req.query.lng),radius=Math.min(5000,Math.max(100,Number(req.query.radius)||1200));
       if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180)return res.status(400).json({error:'有効な緯度・経度が必要です'});
       const nearby=await selectNearbyRoute(lat,lng,radius);if(!nearby)return res.status(404).json({error:'この周辺では進行方向を確認できるKartaViewの連続写真が見つかりませんでした'});
-      sequenceId=nearby.sequenceId;anchorIndex=nearby.anchorIndex;frames=nearby.frames;selection=nearby.selection;
+      sequenceId=nearby.sequenceId;anchorIndex=nearby.anchorIndex;frames=nearby.frames;selection=nearby.selection;candidateRoutes=nearby.candidateRoutes||[];
     }else{
       const photos=await sequencePage(sequenceId,anchorIndex);frames=playbackWindow(photos,anchorIndex,'forward');
     }
     if(!Array.isArray(frames)||frames.length<2)return res.status(404).json({error:'再生可能な画像が不足しています'});
-    return res.status(200).json({version:'0.1.28',source:'KartaView',sequenceId,anchorIndex,selection,frames});
+    return res.status(200).json({version:'0.1.29',source:'KartaView',sequenceId,anchorIndex,selection,frames,candidateRoutes});
   }catch(error){console.error('imagery route error',error);return res.status(502).json({error:'KartaViewからルートを取得できませんでした'});}
 };
