@@ -3,65 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#05070a" />
+  <meta name="theme-color" content="#07110f" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/styles.css?v=0.1.6" />
-  <title>Streetview Journey v0.1.30 Phase 1.6.2 Heading Guard</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="/map.css" />
+  <title>Streetview Journey — Phase 2 Coverage Map</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.30: guarded visual override + distributed preflight + smoothed local heading -->
-  <main id="app" class="app" aria-live="polite">
-    <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
-      <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
-      <img id="layerB" class="scene-layer" alt="" decoding="async" draggable="false" />
-      <div class="vignette"></div><div class="motion-blur"></div>
-      <header class="top-hud"><span class="brand">STREETVIEW JOURNEY</span><span id="sourceBadge" class="badge">KartaView</span></header>
-      <section class="bottom-hud"><div class="location-row"><span id="placeLabel">Demo route</span><span id="frameLabel">0 / 0</span></div><div class="progress-track"><div id="progressBar" class="progress-bar"></div></div><div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">0.08秒・jsfeat Worker</span><span id="coordLabel">—</span></div></section>
+  <main class="coverage-app">
+    <div id="coverageMap" class="coverage-map" aria-label="MapillaryとKartaViewの撮影済みルート地図"></div>
+    <header class="map-header">
+      <div><span class="phase">PHASE 2</span><strong>STREETVIEW</strong><small>撮影済みルートから旅を探す</small></div>
+      <a class="journey-link" href="/journey.html">Journey Engine</a>
+    </header>
+
+    <section class="provider-panel" aria-label="撮影データ表示設定">
+      <div class="provider-head"><div><b>Coverage</b><small>光っている道に実画像あり</small></div><span id="mapStatus">地図を準備中</span></div>
+      <div class="provider-row">
+        <label class="provider-chip karta"><input id="kartaToggle" type="checkbox" checked><span class="dot"></span><span><b>KartaView</b><small id="kartaStatus">接続中</small></span></label>
+        <label class="provider-chip mapillary"><input id="mapillaryToggle" type="checkbox"><span class="dot"></span><span><b>Mapillary</b><small id="mapillaryStatus">トークン未設定</small></span></label>
+        <button id="mapillarySettings" class="settings-button" type="button" aria-label="Mapillary設定">•••</button>
+      </div>
+      <p class="hint">地図を動かして撮影済み道路を探せる。右上の現在地ボタンで近くへ移動。</p>
     </section>
-    <section id="startPanel" class="start-panel"><div class="start-card">
-      <p class="eyebrow">v0.1.30 PHASE 1.6.2 HEADING GUARD</p><h1>ルート全体で、進行方向を正面へ保つ。</h1><p class="lead">Visual Overrideの向き悪化をガードし、Preflightを冒頭〜終端へ分散。区間ごとのVisual Headingを平滑化して、カーブや端部の横向きを抑える。</p>
-      <div class="preset-card"><span class="preset-title">選択中の検証ルート</span><strong>Jakarta / 車・人が多い市街地</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
-      <details class="custom-route"><summary>緯度・経度から探す</summary><div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label><label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label></div><label class="toggle-row"><input id="useCoordinates" type="checkbox" /><span>この座標付近のsequenceを自動検索</span></label></details>
-      <button id="startButton" class="start-button" type="button">旅をはじめる</button><p class="fineprint">開始後は操作不要。Wake Lockが使える環境では画面スリープを防止する。</p>
-    </div></section>
-    <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
-  <script>
-  (()=>{
-    const DIAG_VERSION='0.1.30';
-    const ROUTES=[
-      {id:'jakarta',name:'Jakarta',kind:'車・人が多い市街地',mode:'fixed',lat:-6.19393,lng:106.84937,sequenceId:'6187609',index:650,note:'既存の基準ルート'},
-      {id:'bucharest',name:'Bucharest',kind:'一般市街地・交差点',mode:'coords',lat:44.4332,lng:26.1031,note:'建物・交差点が多い市街地'},
-      {id:'brasov',name:'Brașov',kind:'カーブ・起伏',mode:'coords',lat:45.6270,lng:25.5780,note:'市街地外縁〜曲線道路'},
-      {id:'sinaia',name:'Sinaia',kind:'木・山道',mode:'coords',lat:45.3516,lng:25.5514,note:'森林・起伏のある道路'},
-      {id:'constanta',name:'Constanța郊外',kind:'開けた道路',mode:'coords',lat:44.1598,lng:28.5990,note:'遠景が広い郊外道路'}
-    ];
-    const applied=new Map();let selected=ROUTES[0],sessionRoute=null;
-    const $=id=>document.getElementById(id),pct=v=>Number.isFinite(v)?`${Math.round(v*100)}%`:'—',num=(v,d=2)=>Number.isFinite(v)?v.toFixed(d):'—';
-    function routeFromActualInputs(){const use=!!$('useCoordinates')?.checked,lat=Number($('latInput')?.value),lng=Number($('lngInput')?.value);if(!use)return selected.mode==='fixed'?{...selected}:{...ROUTES[0],id:'jakarta-default'};const match=ROUTES.find(r=>r.mode==='coords'&&Math.abs(r.lat-lat)<1e-5&&Math.abs(r.lng-lng)<1e-5);return match?{...match}:{id:'custom',name:'Custom coordinates',kind:'手動座標',mode:'coords',lat,lng,note:'手動入力'};}
-    function updatePresetCard(){const p=document.querySelector('.preset-card');if(!p)return;p.querySelector('.preset-title').textContent='選択中の検証ルート';p.querySelector('strong').textContent=`${selected.name} / ${selected.kind}`;p.querySelector('small').textContent=selected.mode==='fixed'?`sequence #${selected.sequenceId} / index ${selected.index}付近・${selected.note}`:`${selected.lat.toFixed(4)}, ${selected.lng.toFixed(4)} 付近から向きの合うsequenceを自動選択・${selected.note}`;}
-    function refreshHeader(){const card=document.querySelector('.start-card');if(!card)return;card.querySelector('.eyebrow').textContent='v0.1.30 PHASE 1.6.2 HEADING GUARD';card.querySelector('h1').textContent='ルート全体で進行方向を正面へ合わせる。';card.querySelector('.lead').textContent='Visual Override安全柵、ルート全区間Preflight、平滑Local Heading、距離ガードを統合。冒頭・カーブ・終盤の向きズレを抑えながら、近い連続sequenceを優先する。';updatePresetCard();}
-    function selectRoute(id){const r=ROUTES.find(x=>x.id===id)||ROUTES[0];selected=r;if($('latInput'))$('latInput').value=String(r.lat);if($('lngInput'))$('lngInput').value=String(r.lng);if($('useCoordinates'))$('useCoordinates').checked=r.mode==='coords';window.__journeyValidationRoute={...r};updatePresetCard();}
-    function installRoutePicker(){if($('validationRoutes'))return;const card=document.querySelector('.start-card'),preset=card?.querySelector('.preset-card');if(!card||!preset)return;const section=document.createElement('section');section.id='validationRoutes';section.className='validation-routes';section.setAttribute('aria-label','Phase1 検証ルート');section.innerHTML=`<div class="vr-head"><strong>検証ルート</strong><small>Visual Heading確認用</small></div><div class="vr-scroll">${ROUTES.map((r,i)=>`<label><input type="radio" name="validationRoute" value="${r.id}" ${i===0?'checked':''}><span><b>${r.name}</b><small>${r.kind}</small></span></label>`).join('')}</div>`;preset.insertAdjacentElement('beforebegin',section);section.addEventListener('change',e=>{if(e.target?.name==='validationRoute')selectRoute(e.target.value);});const style=document.createElement('style');style.id='validationRouteStyles';style.textContent=`.validation-routes{margin:0 0 12px;padding:12px;border:1px solid rgba(255,255,255,.10);border-radius:16px;background:rgba(255,255,255,.04)}.vr-head{display:flex;justify-content:space-between;align-items:end;gap:10px;margin-bottom:9px}.vr-head strong{font-size:12px}.vr-head small{font-size:9px;color:rgba(255,255,255,.48)}.vr-scroll{display:flex;gap:7px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch}.vr-scroll::-webkit-scrollbar{display:none}.vr-scroll label{position:relative;flex:0 0 132px}.vr-scroll input{position:absolute;opacity:0;pointer-events:none}.vr-scroll span{display:grid;gap:4px;min-height:48px;padding:9px 10px;border:1px solid rgba(255,255,255,.10);border-radius:12px;background:rgba(255,255,255,.035)}.vr-scroll b{font-size:10px}.vr-scroll small{font-size:8px;line-height:1.3;color:rgba(255,255,255,.48)}.vr-scroll input:checked+span{background:#fff;color:#080b0f;border-color:#fff}.vr-scroll input:checked+span small{color:rgba(8,11,15,.55)}#jdApplied{color:rgba(163,238,202,.96)!important}#jdAxis{color:rgba(255,215,145,.96)!important}`;document.head.appendChild(style);selectRoute('jakarta');}
-    function currentRouteMeta(){const r=sessionRoute||routeFromActualInputs(),place=$('placeLabel')?.textContent||'',seq=place.match(/Sequence\s+#(\d+)/i)?.[1]||r.sequenceId||null,frameText=$('frameLabel')?.textContent||'',frameCount=Number((frameText.split('/')[1]||'').trim())||null;return{id:r.id,name:r.name,kind:r.kind,mode:r.mode,requestedLat:Number.isFinite(r.lat)?r.lat:null,requestedLng:Number.isFinite(r.lng)?r.lng:null,actualSequenceId:seq,frameCount};}
-    function getBaseLog(){if(window.__journeySessionLog)return window.__journeySessionLog;try{return JSON.parse(localStorage.getItem('streetview:lastDiagnosticLog')||'null');}catch{return null;}}
-    function compactPair(p){if(!p)return null;return{frame:p.frame,confidence:p.confidence,rawConfidence:p.rawConfidence,modelKind:p.modelKind,reason:p.reason,safetyFlags:p.safetyFlags||'',parallaxFactor:p.parallaxFactor,appliedSource:p.appliedSource||null,ransacWeight:p.ransacWeight,farFieldWeight:p.farFieldWeight,appliedConfidence:p.appliedConfidence};}
-    function compactLog(base){const src=base&&typeof base==='object'?base:{},arr=Array.isArray(src.pairs)?src.pairs:[],snap=window.__journeyTravelAxis?.snapshot?.()||src.travelAxis||null,sel=snap?.routeSelection||null;let count=0,rs=0,far=0;const sources={};for(const p of arr){const a=applied.get(Number(p.frame));if(a){count++;rs+=a.ransacWeight||0;far+=a.farFieldWeight||0;sources[a.appliedSource||'unknown']=(sources[a.appliedSource||'unknown']||0)+1;}}
-      const edgeFrames=[...new Set([...Array.from({length:Math.min(6,arr.length)},(_,i)=>i),...Array.from({length:Math.min(6,arr.length)},(_,i)=>Math.max(0,arr.length-6+i)),...(src.summary?.safetyGuardFrames||[]),...(src.summary?.weakFrames||[])])].sort((a,b)=>a-b),byFrame=new Map(arr.map(p=>[Number(p.frame),p])),edgePairs=edgeFrames.map(f=>{const p=byFrame.get(f);if(!p)return null;const a=applied.get(f);return compactPair(a?{...p,...a}:p);}).filter(Boolean);
-      return{schema:'streetview-phase1-compact-log-v1',diagnosticVersion:DIAG_VERSION,exportedAt:new Date().toISOString(),route:currentRouteMeta(),summary:{count:src.summary?.count??arr.length,expectedPairs:src.summary?.expectedPairs??null,complete:src.summary?.complete??null,missingFrames:src.summary?.missingFrames||[],avgConfidence:src.summary?.avgConfidence??null,workerErrors:src.summary?.workerErrors??null,safetyGuardPairs:src.summary?.safetyGuardPairs??null,safetyGuardFrames:src.summary?.safetyGuardFrames||[],weakPairs:src.summary?.weakPairs??null,weakFrames:src.summary?.weakFrames||[],parallaxPairs:src.summary?.parallaxPairs??null,maxParallaxFactor:src.summary?.maxParallaxFactor??null,appliedLoggedPairs:count,appliedCoverage:arr.length?count/arr.length:0,avgRansacWeight:count?rs/count:0,avgFarFieldWeight:count?far/count:0,appliedSources:sources},selection:sel?{strategy:sel.strategy,direction:sel.direction,alignmentErrorDeg:sel.alignmentErrorDeg,forwardErrorDeg:sel.forwardErrorDeg,reverseErrorDeg:sel.reverseErrorDeg,score:sel.score,proximityMeters:sel.proximityMeters,searchMode:sel.searchMode,distanceGuard:sel.distanceGuard,candidateCount:sel.candidateCount,metadataChosenSequenceId:sel.metadataChosenSequenceId,visualOverride:sel.visualOverride,overrideAllowed:sel.overrideAllowed,overrideBlockReason:sel.overrideBlockReason,alignmentRegressionDeg:sel.alignmentRegressionDeg,visualPreflightReady:sel.visualPreflightReady,visualPreflight:sel.visualPreflight}:null,heading:snap?{mode:snap.mode,routeFrames:snap.routeFrames,fullResults:snap.fullResults,fullUsable:snap.fullUsable,calibrationBias:snap.calibrationBias,calibrationConfidence:snap.calibrationConfidence,calibrationSpread:snap.calibrationSpread,cameraYawBiasDeg:snap.cameraYawBiasDeg,calibrationSource:snap.calibrationSource,outsideObservationRate:snap.outsideObservationRate,appliedFrame:snap.appliedFrame,metadataAnchor:snap.metadataAnchor,effectiveAnchor:snap.effectiveAnchor,anchorSource:snap.anchorSource,localHeadingBias:snap.localHeadingBias,localHeadingConfidence:snap.localHeadingConfidence,visualShift:snap.visualShift,appliedShift:snap.appliedShift,errors:snap.errors}:null,edgeAndFlaggedPairs:edgePairs};
-    }
-    async function writeClipboard(text){try{await navigator.clipboard.writeText(text);return true;}catch{}const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();let ok=false;try{ok=document.execCommand('copy');}catch{}ta.remove();return ok;}
-    async function copyCompact(e){e.preventDefault();e.stopImmediatePropagation();const b=e.currentTarget,log=compactLog(getBaseLog()),ok=await writeClipboard(JSON.stringify(log,null,2)),old=b.textContent;b.textContent=ok?'短縮ログ コピー完了':'コピー失敗';setTimeout(()=>b.textContent=old,1500);window.__journeyCompactSessionLog=log;}
-    function hookDiagnostics(){const box=$('journeyDiag'),button=$('jdCopy');if(box&&!$('jdApplied')){const line=document.createElement('div');line.id='jdApplied';line.textContent='Applied —';$('jdLine4')?.insertAdjacentElement('afterend',line);}if(button&&!button.dataset.compactHook){button.dataset.compactHook='1';button.textContent='短縮ログをコピー';button.addEventListener('click',copyCompact,true);}}
-    function updateAppliedLine(){hookDiagnostics();const a=window.__journeyDiagnostics?.lastMotionRoute,line=$('jdApplied');if(!line)return;if(!a){line.textContent='Applied —';return;}line.textContent=`Applied ${a.appliedSource||'—'} / Worker ${a.workerSource||'—'} / RS ${pct(a.ransacWeight)} Far ${pct(a.farFieldWeight)} / Δ ${num(a.appliedDx)}, ${num(a.appliedDy)} / Roll ${num(a.appliedRoll)}°`;}
-    window.addEventListener('journey-applied-motion',e=>{const a=e.detail;if(Number.isFinite(a?.frame))applied.set(a.frame,{workerSource:a.workerSource,appliedSource:a.appliedSource,ransacWeight:a.ransacWeight,farFieldWeight:a.farFieldWeight,appliedDx:a.appliedDx,appliedDy:a.appliedDy,appliedRoll:a.appliedRoll,appliedLogScale:a.appliedLogScale,appliedConfidence:a.appliedConfidence});});
-    document.addEventListener('click',e=>{if(e.target?.id==='startButton'){applied.clear();sessionRoute=routeFromActualInputs();window.__journeyValidationRoute={...sessionRoute};}},true);
-    const observer=new MutationObserver(()=>hookDiagnostics());observer.observe(document.documentElement,{childList:true,subtree:true});installRoutePicker();window.addEventListener('DOMContentLoaded',()=>{installRoutePicker();refreshHeader();setTimeout(()=>{refreshHeader();hookDiagnostics();},80);});setInterval(updateAppliedLine,250);
-  })();
-  </script>
-  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/app.js?v=0.1.30" defer></script>
+
+  <section id="tokenSheet" class="token-sheet" hidden aria-label="Mapillary access token設定">
+    <button id="tokenBackdrop" class="sheet-backdrop" type="button" aria-label="閉じる"></button>
+    <div class="sheet-card">
+      <div class="sheet-handle"></div>
+      <span class="phase">MAPILLARY</span>
+      <h1>撮影済みルートを重ねる</h1>
+      <p>Mapillary Vector Tilesの表示にはAccess Tokenが必要。入力値はこの端末のlocalStorageだけに保存し、GitHubには書き込まない。</p>
+      <label>Access Token<input id="mapillaryToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="MLY|..." /></label>
+      <div class="sheet-actions"><button id="saveToken" class="primary" type="button">保存して表示</button><button id="removeToken" type="button">削除</button></div>
+      <button id="closeTokenSheet" class="close-sheet" type="button">閉じる</button>
+    </div>
+  </section>
+
+  <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+  <script src="/map.js"></script>
+  <script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));</script>
 </body>
 </html>
