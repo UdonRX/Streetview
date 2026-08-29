@@ -1,5 +1,5 @@
-/* Streetview Journey v0.1.27 */
-const SHELL_CACHE='streetview-shell-v0.1.27';
+/* Streetview Journey v0.1.27 - five-route center-lock hotfix */
+const SHELL_CACHE='streetview-shell-v0.1.27-centerlock2';
 const IMAGE_CACHE='streetview-images-v0.1.0';
 const SHELL=['/','/index.html','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.27','/travel-axis-worker.js?v=0.1.27','/app.js?v=0.1.27','/diagnostics.js?v=0.1.27','/motion-worker.js?v=0.1.25','/manifest.webmanifest'];
 const IMAGE_LIMIT=80;
