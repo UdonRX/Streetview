@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.9 Normalized Blend Playback Hotfix */
+/* Streetview Journey v0.1.10 Perceptual Bridge Flow */
 (() => {
-  const VERSION = '0.1.9';
+  const VERSION = '0.1.10';
   const BASE_FILTER = 'brightness(.9) contrast(1.08) saturate(.94)';
   const TILE_COLS = 4;
   const TILE_ROWS = 5;
@@ -16,9 +16,12 @@
   const MAX_NEIGHBOR_DY = 1.25;
   const TILE_OVERLAP_CSS_PX = 12;
   const ACCUM_SCALE = 0.16;
-  const NORMALIZE_FPS = 24;
-  const NORMALIZE_SCALE = 0.46;
+  const NORMALIZE_FPS = 36;
+  const NORMALIZE_SCALE = 0.40;
   const MIN_WEIGHT_BYTE = 3;
+  const BRIDGE_RADIAL_GAIN = 0.014;
+  const BRIDGE_BLUR_BOOST = 1.20;
+  const BRIDGE_MIN_STRENGTH = 0.18;
 
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,14 +42,14 @@
     $('seamCanvas')?.remove();
 
     if (card) {
-      card.querySelector('.eyebrow').textContent = 'v0.1.9 NORMALIZED BLEND PLAYBACK HOTFIX';
-      card.querySelector('h1').textContent = '格子を描かず、景色だけをつなぐ。';
-      card.querySelector('.lead').textContent = '正規化ブレンドは維持し、補間処理だけを軽量バッファへ移してiPhoneで連続再生できるよう修正した版。';
+      card.querySelector('.eyebrow').textContent = 'v0.1.10 PERCEPTUAL BRIDGE FLOW';
+      card.querySelector('h1').textContent = '飛びを、前進として見せる。';
+      card.querySelector('.lead').textContent = 'Normalized Tile Flowに、等間隔の中間ステップと周辺視野の前進スミアを加え、写真間の距離を瞬間移動ではなく連続した移動として感じやすくする実験版。';
       const preset = card.querySelector('.preset-card');
       if (preset) {
-        preset.querySelector('.preset-title').textContent = 'Normalized Blend Playback Fixデモ';
+        preset.querySelector('.preset-title').textContent = 'Perceptual Bridge Flowデモ';
         preset.querySelector('strong').textContent = 'Jakarta / KartaView sample sequence';
-        preset.querySelector('small').textContent = '4×5 Tile Flow + 12px overlap + 軽量weight normalization / 速度比較は維持';
+        preset.querySelector('small').textContent = '4×5 Tile Flow + Apparent-motion bridge + 周辺モーションマスク / 速度比較は維持';
       }
       if (!document.querySelector('.speed-lab')) {
         const lab = document.createElement('div');
@@ -70,7 +73,7 @@
     $('stabilizedTileStyles').textContent = `
       .flow-canvas{position:absolute;z-index:2;inset:-3%;width:106%;height:106%;opacity:0;pointer-events:none;filter:${BASE_FILTER};will-change:contents}
       .scene-layer{z-index:1}.vignette,.motion-blur{z-index:3}.top-hud,.bottom-hud{z-index:4}
-      .motion-blur.drive-stabilized{opacity:1!important;background:transparent;backdrop-filter:blur(.85px);-webkit-backdrop-filter:blur(.85px);mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);-webkit-mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);transition:none}
+      .motion-blur.drive-stabilized{opacity:1!important;background:transparent;backdrop-filter:blur(var(--drive-blur,.85px));-webkit-backdrop-filter:blur(var(--drive-blur,.85px));mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);-webkit-mask-image:radial-gradient(ellipse at center,transparent 0 31%,rgba(0,0,0,.18) 49%,#000 92%);transition:none}
       .speed-lab{margin:0 0 12px;padding:12px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(255,255,255,.04)}
       .speed-title{display:flex;align-items:end;justify-content:space-between;gap:8px;margin-bottom:9px}.speed-title strong{font-size:12px}.speed-title small{font-size:9px;color:rgba(255,255,255,.48)}
       .speed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.speed-grid label{position:relative}.speed-grid input{position:absolute;opacity:0;pointer-events:none}
@@ -180,6 +183,25 @@
     };
   }
 
+  function perceptualBridgeStrength(i) {
+    const distance = distanceMeters(route[i], route[i + 1]);
+    const turn = Math.abs(angle(travelBearing(i), travelBearing(i + 1)));
+    const distancePart = Number.isFinite(distance) ? clamp((distance - 1.2) / 7.0, 0, 1) : .35;
+    const turnPart = clamp(turn / 32, 0, 1);
+    return clamp(BRIDGE_MIN_STRENGTH + distancePart * .62 + turnPart * .20, BRIDGE_MIN_STRENGTH, 1);
+  }
+
+  function setPerceptualBridgeVisual(progress, strength) {
+    if (!ui.edgeBlur) return;
+    const pulse = Math.sin(Math.PI * clamp(progress, 0, 1));
+    const blur = .85 + BRIDGE_BLUR_BOOST * strength * pulse;
+    ui.edgeBlur.style.setProperty('--drive-blur', `${blur.toFixed(2)}px`);
+  }
+
+  function resetPerceptualBridgeVisual() {
+    ui.edgeBlur?.style.setProperty('--drive-blur', '.85px');
+  }
+
   function loadRender(url) {
     if (!renderCache.has(url)) {
       renderCache.set(url, new Promise((resolve, reject) => {
@@ -202,7 +224,7 @@
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         const sep = url.includes('?') ? '&' : '?';
-        img.src = `${url}${sep}analysis=v019hotfix`;
+        img.src = `${url}${sep}analysis=v0110`;
       }));
     }
     return corsCache.get(url);
@@ -524,12 +546,18 @@
     targetCtx.globalCompositeOperation = 'lighter';
   }
 
-  function accumulateLayer(layer, vector, progress, incoming, temporalAlpha) {
+  function accumulateLayer(layer, vector, progress, incoming, temporalAlpha, bridgeStrength) {
     const scaleX = colorCanvas.width / ANALYSIS_W;
     const scaleY = colorCanvas.height / ANALYSIS_H;
     const factor = incoming ? -(1 - progress) : progress;
-    const dx = layer.asset.sx + vector.vx * scaleX * factor;
-    const dy = layer.asset.sy + vector.vy * scaleY * factor;
+    const tileCx = layer.asset.sx + layer.asset.sw * .5;
+    const tileCy = layer.asset.sy + layer.asset.sh * .5;
+    const vanishX = colorCanvas.width * .5;
+    const vanishY = colorCanvas.height * .46;
+    const radialPhase = incoming ? -(1 - progress) : progress;
+    const radial = BRIDGE_RADIAL_GAIN * bridgeStrength * radialPhase;
+    const dx = layer.asset.sx + vector.vx * scaleX * factor + (tileCx - vanishX) * radial;
+    const dy = layer.asset.sy + vector.vy * scaleY * factor + (tileCy - vanishY) * radial;
     const alpha = temporalAlpha * ACCUM_SCALE;
     colorCtx.globalAlpha = alpha;
     colorCtx.drawImage(layer.color, dx, dy);
@@ -547,13 +575,13 @@
     fallbackCtx.globalAlpha = 1;
   }
 
-  function normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, progress) {
+  function normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, progress, bridgeStrength) {
     const w = colorCanvas.width, h = colorCanvas.height;
     clearAccumulator(colorCtx, w, h);
     clearAccumulator(weightCtx, w, h);
     const outAlpha = 1 - progress, inAlpha = progress;
-    for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersA[n], vectors[n], progress, false, outAlpha);
-    for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersB[n], vectors[n], progress, true, inAlpha);
+    for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersA[n], vectors[n], progress, false, outAlpha, bridgeStrength);
+    for (let n = 0; n < vectors.length; n += 1) accumulateLayer(layersB[n], vectors[n], progress, true, inAlpha, bridgeStrength);
     colorCtx.globalCompositeOperation = 'source-over';
     weightCtx.globalCompositeOperation = 'source-over';
     colorCtx.globalAlpha = 1;
@@ -598,7 +626,7 @@
     const direction = travelBearing(i);
     ui.heading.textContent = Number.isFinite(direction) ? `${Math.round(direction)}°` : '—°';
     ui.coord.textContent = hasCoords(frame) ? `${frame.lat.toFixed(5)}, ${frame.lng.toFixed(5)}` : '—';
-    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Normalized Lite・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
+    ui.net.textContent = `B・${(speedMs / 1000).toFixed(2)}秒・Perceptual Bridge・水平 ${rollValue >= 0 ? '+' : ''}${rollValue.toFixed(1)}°`;
   }
 
   async function showFirst() {
@@ -611,6 +639,7 @@
     ui.a.style.opacity = '0';
     ui.b.style.opacity = '0';
     ui.edgeBlur?.classList.add('drive-stabilized');
+    resetPerceptualBridgeVisual();
     currentImage = image;
     updateHud(0, roll);
   }
@@ -622,33 +651,43 @@
     const frameB = createCorrectedFrame(nextImage, i + 1, rollB);
     const layersA = prepareTileLayers(frameA);
     const layersB = prepareTileLayers(frameB);
-    const duration = Math.max(72, Math.round(speedMs * .82));
+    const bridgeStrength = perceptualBridgeStrength(i);
+    const duration = Math.max(88, Math.round(speedMs * .92));
     const minFrameMs = 1000 / NORMALIZE_FPS;
     const start = performance.now();
     let lastDraw = -Infinity;
+    let finalRendered = false;
 
     await new Promise((resolve) => {
       function tick(now) {
         const t = clamp((now - start) / duration, 0, 1);
-        if (t >= 1 || now - lastDraw >= minFrameMs) {
-          const smooth = t * t * (3 - 2 * t);
+        const mustDraw = t >= 1 || now - lastDraw >= minFrameMs;
+        if (mustDraw) {
+          const motionProgress = t;
+          setPerceptualBridgeVisual(motionProgress, bridgeStrength);
           try {
-            normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, smooth);
+            normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, motionProgress, bridgeStrength);
           } catch (error) {
-            console.warn('Normalized blend fallback', error);
+            console.warn('Perceptual bridge fallback', error);
             ctx.globalAlpha = 1;
             ctx.drawImage(frameA, 0, 0);
-            ctx.globalAlpha = smooth;
+            ctx.globalAlpha = motionProgress;
             ctx.drawImage(frameB, 0, 0);
             ctx.globalAlpha = 1;
           }
           lastDraw = now;
+          if (t >= 1) finalRendered = true;
         }
         if (t < 1) requestAnimationFrame(tick); else resolve();
       }
       requestAnimationFrame(tick);
     });
 
+    if (!finalRendered) {
+      try { normalizeAccumulation(frameA, frameB, layersA, layersB, vectors, 1, bridgeStrength); } catch {}
+    }
+    resetPerceptualBridgeVisual();
+    ctx.globalAlpha = 1;
     ctx.drawImage(frameB, 0, 0);
     currentImage = nextImage;
     updateHud(i + 1, rollB);
@@ -713,6 +752,7 @@
       await play(data.frames);
     } catch (error) {
       ui.edgeBlur?.classList.remove('drive-stabilized');
+      resetPerceptualBridgeVisual();
       ui.canvas.style.opacity = '0';
       ui.err.textContent = error?.message || '不明なエラーが発生しました';
       ui.error.hidden = false;
@@ -726,6 +766,7 @@
   function reset() {
     token += 1;
     ui.edgeBlur?.classList.remove('drive-stabilized');
+    resetPerceptualBridgeVisual();
     ui.canvas.style.opacity = '0';
     ui.error.hidden = true;
     ui.start.hidden = false;
@@ -737,7 +778,7 @@
     if (document.visibilityState === 'visible' && (!wake || wake.released)) requestWakeLock();
   });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.9').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=0.1.10').catch(() => {}));
   }
   console.info(`Streetview Journey v${VERSION}`);
 })();
