@@ -1,6 +1,6 @@
-/* Streetview Journey v0.1.19 iPhone Safari OpenCV CDN Loader */
+/* Streetview Journey v0.1.20 Lazy OpenCV Loader */
 (() => {
-  const LOADER_VERSION = '0.1.19';
+  const LOADER_VERSION = '0.1.20';
   const SOURCES = [
     {
       label: 'jsDelivr @techstark/opencv-js 4.10.0',
@@ -12,20 +12,32 @@
     }
   ];
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  let resolveReady;
+  let rejectReady;
+  const readyPromise = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
   const state = window.__opencvLoaderState = {
     version: LOADER_VERSION,
     source: null,
     sourceLabel: null,
     attempt: 0,
+    requested: false,
+    loading: false,
     script: false,
     runtime: false,
-    promise: false,
+    promise: true,
     mat: false,
     lk: false,
     ready: false,
     error: null,
-    startedAt: performance.now()
+    startedAt: 0
   };
+
+  window.cv = readyPromise;
 
   const isApiReady = (cv) =>
     Boolean(cv?.Mat && cv?.matFromArray && cv?.goodFeaturesToTrack && cv?.calcOpticalFlowPyrLK);
@@ -33,21 +45,22 @@
   function updateApiState(cv) {
     state.mat = Boolean(cv?.Mat && cv?.matFromArray);
     state.lk = Boolean(cv?.goodFeaturesToTrack && cv?.calcOpticalFlowPyrLK);
-    if (isApiReady(cv)) {
-      state.runtime = true;
-      state.ready = true;
-      state.error = null;
-      window.cv = cv;
-      window.dispatchEvent(new CustomEvent('journey-opencv-ready', {
-        detail: {
-          version: LOADER_VERSION,
-          source: state.source,
-          sourceLabel: state.sourceLabel
-        }
-      }));
-      return true;
-    }
-    return false;
+    if (!isApiReady(cv)) return false;
+
+    state.runtime = true;
+    state.ready = true;
+    state.loading = false;
+    state.error = null;
+    window.cv = cv;
+    resolveReady(cv);
+    window.dispatchEvent(new CustomEvent('journey-opencv-ready', {
+      detail: {
+        version: LOADER_VERSION,
+        source: state.source,
+        sourceLabel: state.sourceLabel
+      }
+    }));
+    return true;
   }
 
   function attachRuntimeHook(target) {
@@ -59,7 +72,7 @@
         state.runtime = true;
         try { previous?.apply(this, arguments); } catch {}
         Promise.resolve().then(async () => {
-          const cv = await unwrapCv(1800);
+          const cv = await unwrapRuntimeCandidate(1800);
           if (cv) updateApiState(cv);
         });
       };
@@ -67,9 +80,9 @@
     } catch {}
   }
 
-  async function unwrapCv(timeoutMs = 1000) {
+  async function unwrapRuntimeCandidate(timeoutMs = 1000) {
     const candidate = window.cv;
-    if (!candidate) return null;
+    if (!candidate || candidate === readyPromise) return null;
     if (typeof candidate.then === 'function') {
       state.promise = true;
       try {
@@ -82,11 +95,10 @@
           attachRuntimeHook(resolved);
           return resolved;
         }
-        return null;
       } catch (error) {
         state.error = `cv Promise: ${error?.message || error}`;
-        return null;
       }
+      return null;
     }
     attachRuntimeHook(candidate);
     return candidate;
@@ -101,7 +113,7 @@
         state.runtime = true;
         try { previousRuntime?.(); } catch {}
         Promise.resolve().then(async () => {
-          const cv = await unwrapCv(1800);
+          const cv = await unwrapRuntimeCandidate(1800);
           if (cv) updateApiState(cv);
         });
       }
@@ -110,8 +122,8 @@
 
   function renderLoaderState() {
     const eyebrow = document.querySelector('.start-card .eyebrow');
-    if (eyebrow && eyebrow.textContent !== 'v0.1.19 PHASE 1.2.2 OPENCV CDN FIX') {
-      eyebrow.textContent = 'v0.1.19 PHASE 1.2.2 OPENCV CDN FIX';
+    if (eyebrow && eyebrow.textContent !== 'v0.1.20 PHASE 1.2.3 LAZY OPENCV FIX') {
+      eyebrow.textContent = 'v0.1.20 PHASE 1.2.3 LAZY OPENCV FIX';
     }
     const diag = document.getElementById('journeyDiag');
     if (!diag) return;
@@ -125,8 +137,9 @@
       head?.insertAdjacentElement('afterend', line);
     }
     const flag = (ok) => ok ? '✓' : '—';
+    const phase = !state.requested ? '待機' : (state.ready ? 'Ready' : state.loading ? 'Loading' : 'Fallback');
     line.textContent =
-      `Loader Script${flag(state.script)} Runtime${flag(state.runtime)} Mat${flag(state.mat)} LK${flag(state.lk)}${state.promise ? ' Promise✓' : ''}`;
+      `Loader ${phase} Script${flag(state.script)} Runtime${flag(state.runtime)} Mat${flag(state.mat)} LK${flag(state.lk)}`;
     if (state.sourceLabel) line.textContent += ` / ${state.sourceLabel}`;
     if (state.error && !state.ready) line.textContent += ` / ${state.error}`;
   }
@@ -134,7 +147,7 @@
   async function waitUntilReady(maxMs) {
     const started = performance.now();
     while (performance.now() - started < maxMs) {
-      const cv = await unwrapCv(1200);
+      const cv = await unwrapRuntimeCandidate(1200);
       if (cv && updateApiState(cv)) return cv;
       await sleep(80);
     }
@@ -147,15 +160,13 @@
     state.attempt = attempt + 1;
     state.script = false;
     state.runtime = false;
-    state.promise = false;
     state.mat = false;
     state.lk = false;
-    state.ready = false;
     state.error = null;
 
     installRuntimeModule();
 
-    const stale = document.querySelector('script[data-journey-opencv]');
+    const stale = document.querySelector('script[data-journey-opencv-runtime]');
     if (stale) stale.remove();
 
     try { delete window.cv; } catch { window.cv = undefined; }
@@ -163,14 +174,14 @@
     const script = document.createElement('script');
     script.async = true;
     script.src = source.url;
-    script.dataset.journeyOpencv = '1';
+    script.dataset.journeyOpencvRuntime = '1';
     script.dataset.loaderVersion = LOADER_VERSION;
     script.referrerPolicy = 'no-referrer';
 
     const loaded = new Promise((resolve, reject) => {
       script.addEventListener('load', async () => {
         state.script = true;
-        const cv = await unwrapCv(1600);
+        const cv = await unwrapRuntimeCandidate(1800);
         if (cv) updateApiState(cv);
         resolve(true);
       }, { once: true });
@@ -185,27 +196,48 @@
     return waitUntilReady(20000);
   }
 
-  async function boot() {
-    const already = await unwrapCv(80);
-    if (already && updateApiState(already)) return;
+  let bootPromise = null;
+  async function start() {
+    if (state.ready) return window.cv;
+    if (bootPromise) return bootPromise;
 
-    for (let i = 0; i < SOURCES.length; i += 1) {
-      try {
-        const cv = await loadSource(SOURCES[i], i);
-        if (cv) return;
-        state.error = `runtime timeout (${i + 1})`;
-      } catch (error) {
-        state.error = error?.message || String(error);
+    state.requested = true;
+    state.loading = true;
+    state.startedAt = performance.now();
+
+    bootPromise = (async () => {
+      for (let i = 0; i < SOURCES.length; i += 1) {
+        try {
+          const cv = await loadSource(SOURCES[i], i);
+          if (cv) return cv;
+          state.error = `runtime timeout (${i + 1})`;
+        } catch (error) {
+          state.error = error?.message || String(error);
+        }
       }
-    }
-    state.ready = false;
-    window.dispatchEvent(new CustomEvent('journey-opencv-failed', { detail: { ...state } }));
+      state.loading = false;
+      state.ready = false;
+      const error = new Error(state.error || 'OpenCV load failed');
+      rejectReady(error);
+      window.dispatchEvent(new CustomEvent('journey-opencv-failed', { detail: { ...state } }));
+      return null;
+    })();
+
+    return bootPromise;
   }
 
-  setInterval(renderLoaderState, 250);
-  boot().catch((error) => {
-    state.error = error?.message || String(error);
-    state.ready = false;
+  const startButton = document.getElementById('startButton');
+  startButton?.addEventListener('click', () => {
+    requestAnimationFrame(() => setTimeout(() => start().catch(() => {}), 0));
   });
-  console.info(`Streetview Journey OpenCV Loader v${LOADER_VERSION}`);
+
+  window.__journeyOpenCVLoader = {
+    version: LOADER_VERSION,
+    state,
+    ready: readyPromise,
+    start
+  };
+
+  setInterval(renderLoaderState, 250);
+  console.info(`Streetview Journey Lazy OpenCV Loader v${LOADER_VERSION}`);
 })();

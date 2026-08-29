@@ -9,10 +9,10 @@
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css?v=0.1.6" />
-  <title>Streetview Journey v0.1.19 OpenCV CDN Fix</title>
+  <title>Streetview Journey v0.1.20 Lazy OpenCV Fix</title>
 </head>
 <body>
-  <!-- Streetview Journey v0.1.19 Phase 1.2.2 OpenCV CDN Fix -->
+  <!-- Streetview Journey v0.1.20 Phase 1.2.3 Lazy OpenCV Fix -->
   <main id="app" class="app" aria-live="polite">
     <section id="viewer" class="viewer" aria-label="自動ストリートビュー">
       <img id="layerA" class="scene-layer is-visible" alt="" decoding="async" draggable="false" />
@@ -28,10 +28,10 @@
     </section>
     <section id="startPanel" class="start-panel">
       <div class="start-card">
-        <p class="eyebrow">v0.1.19 PHASE 1.2.2 OPENCV CDN FIX</p>
-        <h1>iPhone SafariでOpenCVを確実に読み込む。</h1>
-        <p class="lead">docs.opencv.org直読みをやめ、@techstark/opencv-js 4.10.0-release.1をjsDelivr→unpkgの順で固定ロード。Script・Runtime・Mat・Optical Flowの準備状態を診断する。</p>
-        <div class="preset-card"><span class="preset-title">Phase 1.2.2 OpenCV CDN Fix</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
+        <p class="eyebrow">v0.1.20 PHASE 1.2.3 LAZY OPENCV FIX</p>
+        <h1>0.08秒のJourneyを先に起動して、OpenCVは後から準備する。</h1>
+        <p class="lead">iPhone SafariでOpenCVの重い読み込みが開始ボタンを巻き込まないよう、TOPでは軽量Loaderだけ待機。旅開始後にOpenCV本体を読み込み、失敗時は既存Far-fieldへ自動フォールバックする。</p>
+        <div class="preset-card"><span class="preset-title">Phase 1.2.3 Lazy OpenCV Fix</span><strong>Jakarta / KartaView sample sequence</strong><small>sequence #6187609 / index 650付近から連続72枚</small></div>
         <details class="custom-route">
           <summary>緯度・経度から探す</summary>
           <div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="-6.19393" /></label><label>経度<input id="lngInput" inputmode="decimal" value="106.84937" /></label></div>
@@ -43,7 +43,7 @@
     </section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">もう一度</button></div></section>
   </main>
-  <script src="/opencv-loader.js?v=0.1.19" defer></script>
+  <script src="/opencv-loader.js?v=0.1.20" data-journey-opencv defer></script>
   <script src="/app.js?v=0.1.16" defer></script>
   <script src="/diagnostics.js?v=0.1.17" defer></script>
 </body>

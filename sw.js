@@ -1,11 +1,11 @@
-/* Streetview Journey v0.1.19 */
-const SHELL_CACHE = 'streetview-shell-v0.1.19';
+/* Streetview Journey v0.1.20 */
+const SHELL_CACHE = 'streetview-shell-v0.1.20';
 const IMAGE_CACHE = 'streetview-images-v0.1.0';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css?v=0.1.6',
-  '/opencv-loader.js?v=0.1.19',
+  '/opencv-loader.js?v=0.1.20',
   '/app.js?v=0.1.16',
   '/diagnostics.js?v=0.1.17',
   '/manifest.webmanifest'
