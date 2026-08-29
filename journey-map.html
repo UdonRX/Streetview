@@ -32,6 +32,7 @@
   (()=>{
     const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com',CHUNK=96,BATCH=48,MAX_RETRY=2,LOW_BUFFER=24,HIGH_BUFFER=72,SAVE_INTERVAL=3000;
     let selected=null,lastSave=0;try{selected=JSON.parse(sessionStorage.getItem(KEY)||'null');}catch{}
+    window.__journeySelectedRoute=selected;
     const nativeFetch=window.fetch.bind(window);
     window.fetch=(input,init)=>{const url=typeof input==='string'?input:input?.url||'';if(selected&&url.includes('/api/imagery'))return Promise.resolve({ok:true,status:200,json:async()=>selected});return nativeFetch(input,init);};
     window.__journeyValidationRoute=selected?{id:'map-selected',name:selected.provider||selected.source||'Selected',kind:'地図選択',mode:'fixed',sequenceId:selected.sequenceId||null,lat:selected.frames?.[0]?.lat??null,lng:selected.frames?.[0]?.lng??null}:null;
@@ -39,7 +40,7 @@
     const token=()=>{try{return localStorage.getItem(TOKEN_KEY)||''}catch{return''}};
     async function batchMeta(refs){const t=token();if(!t)throw new Error('Mapillary token missing');const out=new Array(refs.length).fill(null),fields='id,sequence,captured_at,computed_geometry,compass_angle,thumb_2048_url,is_pano';for(let s=0;s<refs.length;s+=BATCH){const part=refs.slice(s,s+BATCH),ids=part.map(r=>r.id).join(','),url=`${GRAPH}/images?image_ids=${encodeURIComponent(ids)}&fields=${encodeURIComponent(fields)}`;try{const r=await nativeFetch(url,{headers:{Authorization:`OAuth ${t}`}}),j=await r.json().catch(()=>({}));if(!r.ok||j?.error)continue;const by=new Map((j?.data||[]).map(x=>[String(x.id),x]));part.forEach((ref,i)=>{out[s+i]=by.get(String(ref.id))||null})}catch{}}return out}
     function frame(m,r){const c=m?.computed_geometry?.coordinates;if(!Array.isArray(c)||c.length<2||!m?.thumb_2048_url)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,url:m.thumb_2048_url,provider:'Mapillary',capturedAt:m.captured_at||null}}
-    function syncState(){const s=window.__journeyStreamState;if(!s||!selected)return;s.frames=selected.frames;s.active=!!selected.streamPending?.length;s.complete=!s.active;s.total=selected.selection?.totalImageIds||selected.frames.length}
+    function syncState(){const s=window.__journeyStreamState;if(!s||!selected)return;s.frames=selected.frames;s.active=!!selected.streamPending?.length;s.complete=!s.active;s.total=selected.selection?.totalImageIds||selected.frames.length;window.__journeySelectedRoute=selected}
     function save(force=false){const now=Date.now();if(!force&&now-lastSave<SAVE_INTERVAL)return;lastSave=now;try{sessionStorage.setItem(KEY,JSON.stringify(selected))}catch{}}
     function updateStreamingHud(){const net=document.getElementById('networkLabel');if(!net||!selected)return;const done=selected.frames?.length||0,pending=selected.streamPending?.length||0,total=selected.selection?.totalImageIds||done+pending;net.textContent=pending?`続きを準備中 ${done}/${total}`:`準備完了 ${done}/${total}`;const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=pending?`${done}枚準備済み / 全${total}枚予定`:`${done}枚の連続画像`;syncState()}
     function prewarm(frames){for(const f of frames.slice(0,48)){try{const i=new Image();i.decoding='async';i.referrerPolicy='no-referrer';i.src=f.url}catch{}}}
@@ -54,13 +55,13 @@
       const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=selected?.streamPending?.length?`${count}枚準備済み / 全${total}枚予定`:`${count}枚の連続画像`;
       const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?.streamPending?.length?'先頭バッファですぐ開始。残りは再生中に取得する。':selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
       if(provider==='Mapillary'){const hud=document.querySelector('.top-hud');if(hud&&!document.getElementById('mapillaryAttribution')){const a=document.createElement('a');a.id='mapillaryAttribution';a.href='https://www.mapillary.com/';a.target='_blank';a.rel='noopener';a.textContent='© Mapillary';a.style.cssText='margin-left:8px;color:#fff;font-size:9px;text-decoration:none;opacity:.82';hud.appendChild(a)}}
-      if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね'}}else if(new URLSearchParams(location.search).get('autostart')==='1')setTimeout(()=>document.getElementById('startButton')?.click(),180);
+      if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね'}}else if(new URLSearchParams(location.search).get('autostart')==='1')setTimeout(()=>document.getElementById('startButton')?.click(),260);
       const back=document.getElementById('journeyBack');if(back)back.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();location.href='/'},true);
       setInterval(bufferGuard,220);setTimeout(installCompactLogButton,0);
       continueStream().catch(()=>{if(selected){selected.streamOpen=false;window.__journeyStreamState.failed=true;window.__journeyStreamState.active=false;syncState();save(true)}});
     });
   })();
   </script>
-  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/app.js?v=0.1.30" defer></script>
+  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/app.js?v=0.1.31" defer></script>
 </body>
 </html>
