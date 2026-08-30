@@ -1,14 +1,14 @@
-/* Journey playback diagnostics: clock/load/fallback only. */
+/* Journey playback diagnostics: clock/load/fallback + transport classification. */
 (()=>{
   if(window.__journeyPlaybackLoggerInstalled)return;
   window.__journeyPlaybackLoggerInstalled=true;
-  const VERSION='0.1.43-contiguous-log',MAX_EVENTS=260,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
+  const VERSION='0.1.50-transport-log',MAX_EVENTS=260,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
   const trace={schema:'streetview-journey-playback-diagnostic-v2',version:VERSION,startedAt:null,events:[]};
-  let active=false,t0=0,lastIndex=null,lastAdvance=0,lastStall=0,lastRaf=performance.now();
+  let active=false,t0=0,lastIndex=null,lastAdvance=0,lastStall=0,lastRaf=performance.now(),transportSignature='';
   const round=v=>Number.isFinite(v)?Math.round(v*10)/10:null;
   const loadStats={raw:{start:0,complete:0,timeout:0,error:0,totalMs:0,maxMs:0},analysis:{start:0,complete:0,timeout:0,error:0,totalMs:0,maxMs:0}};
   function compact(){
-    const p=window.__journeyPlaybackState||{},s=window.__journeyStreamState||{},e=window.JourneyEngine?.getState?.()||{},d=window.__journeyDiagnostics||{},r=window.__journeyRawRuntime||{},h=window.__journeyHybridQuality?.state?.()||null;
+    const p=window.__journeyPlaybackState||{},s=window.__journeyStreamState||{},e=window.JourneyEngine?.getState?.()||{},d=window.__journeyDiagnostics||{},r=window.__journeyRawRuntime||{},h=window.__journeyHybridQuality?.state?.()||null,t=window.JourneyTransportClassifier?.state?.()||null;
     const stats={};for(const k of ['raw','analysis']){const x=loadStats[k];stats[k]={start:x.start,complete:x.complete,timeout:x.timeout,error:x.error,avgMs:x.complete?Math.round(x.totalMs/x.complete):0,maxMs:x.maxMs}}
     const contiguous=Number.isFinite(r.contiguousRawAhead)?r.contiguousRawAhead:(p.rawAheadReady??e.rawAheadReady??null);
     return{
@@ -18,6 +18,7 @@
       ahead:{rawReady:contiguous,rawTotalReady:p.rawAheadTotalReady??e.rawAheadTotalReady??d.rawAheadTotalReady??null,stabilizedReady:p.stabilizedAheadReady??e.stabilizedAheadReady??null,pairReady:p.pairAheadReady??e.pairAheadReady??null},
       loader:{queued:p.rawQueue??e.rawQueue??d.rawQueue??null,active:p.rawActive??e.rawActive??d.rawActive??null,emergencyActive:p.rawEmergencyActive??e.rawEmergencyActive??d.rawEmergencyActive??null,backgroundActive:p.rawBackgroundActive??e.rawBackgroundActive??d.rawBackgroundActive??null,rawTimeoutMs:r.rawTimeoutMs??null},
       cache:{raw:e.readyFrames??d.rawReady??null,frame:e.frameCache??null,pair:e.pairCache??null,tile:e.tileLayerCache??null},rawSource:{variant:r.rawVariant??null,lightUrls:r.lightUrlCount??null,lightDisabled:r.lightDisabled??null},loads:stats,hybridQuality:h,
+      transport:{transportMode:t?.transportMode||'UNKNOWN',sequenceModes:t?.sequenceModes||{},requests:t?.requests||0,cacheHits:t?.cacheHits||0,errors:t?.errors||0},
       stream:{active:!!s.active,complete:!!s.complete,failed:!!s.failed,frameCount:Array.isArray(s.frames)?s.frames.length:0},worker:{ready:!!d.workerReady,lastPairMs:round(d.lastPairMs)}
     };
   }
@@ -26,12 +27,18 @@
   async function copy(){const payload={...trace,exportedAt:new Date().toISOString(),current:compact()};const text=JSON.stringify(payload,null,2);try{await navigator.clipboard.writeText(text);return true}catch{}try{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();return true}catch{return false}}
   function installButton(){let btn=document.getElementById('playbackLogCopy');if(!btn){btn=document.createElement('button');btn.id='playbackLogCopy';btn.type='button';document.body.appendChild(btn)}btn.textContent='再生ログコピー';btn.style.cssText='position:fixed;z-index:31;right:10px;top:calc(env(safe-area-inset-top) + 98px);height:30px;padding:0 9px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(5,8,12,.58);color:#fff;font:700 9px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:auto';btn.onclick=async e=>{e.preventDefault();e.stopPropagation();const ok=await copy();btn.textContent=ok?'コピー完了':'コピー失敗';setTimeout(()=>btn.textContent='再生ログコピー',1000)}}
   window.__copyJourneyPlaybackLog=copy;
-  window.addEventListener('journey-playback-started',e=>start(e.detail||{}));window.addEventListener('journey-frame-presented',e=>{if(active)log('present',e.detail||{})});window.addEventListener('journey-image-wait-start',e=>{if(active)log('wait-start',e.detail||{})});window.addEventListener('journey-image-wait-resolved',e=>{if(active)log('wait-resolved',e.detail||{})});
+  window.addEventListener('journey-playback-started',e=>{start(e.detail||{});maybeClassifyTransport(true)});window.addEventListener('journey-frame-presented',e=>{if(active)log('present',e.detail||{})});window.addEventListener('journey-image-wait-start',e=>{if(active)log('wait-start',e.detail||{})});window.addEventListener('journey-image-wait-resolved',e=>{if(active)log('wait-resolved',e.detail||{})});
   window.addEventListener('journey-image-load',e=>{const d=e.detail||{},kind=d.purpose==='analysis'?'analysis':'raw',s=loadStats[kind];if(d.phase==='start')s.start++;else if(d.phase==='complete'){s.complete++;const ms=Number(d.elapsedMs)||0;s.totalMs+=ms;s.maxMs=Math.max(s.maxMs,ms)}else if(d.phase==='timeout')s.timeout++;else if(d.phase==='error')s.error++;if(!active)return;if(d.phase==='start'||d.phase==='complete'||d.phase==='timeout'||d.phase==='error')log(`load-${d.phase}`,{index:d.index??null,purpose:kind,transport:d.transport||null,variant:d.variant||null,elapsedMs:d.elapsedMs??null,timeoutMs:d.timeoutMs??null,width:d.width??null,height:d.height??null,contiguousRawAhead:d.contiguousRawAhead??null});if(d.phase==='optical-paused'||d.phase==='optical-resumed')log(d.phase,{rawAhead:d.rawAhead??null,threshold:d.threshold??null})});
   window.addEventListener('journey-hybrid-quality',e=>{if(active)log(`hybrid-${e.detail?.phase||'event'}`,e.detail||{})});
+  window.addEventListener('journey-transport-classified',e=>{if(active)log('transport-classified',e.detail||{})});
   window.addEventListener('journey-playback-ended',e=>{if(active)log('ended',{detail:e.detail||null,state:compact()})});document.addEventListener('visibilitychange',()=>{if(active&&document.visibilityState!=='visible')log('visibility',{value:document.visibilityState})});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installButton,{once:true});else installButton();
   setInterval(()=>{if(!active)return;const now=performance.now(),s=compact(),idx=s.index;if(idx!==lastIndex){const delta=lastIndex===null?0:now-lastAdvance;lastIndex=idx;lastAdvance=now;log('advance',{index:idx,deltaMs:round(delta),latenessMs:s.clock.latenessMs,path:s.path.last,ahead:s.ahead,loader:s.loader})}const canAdvance=Number.isFinite(idx)&&Number.isFinite(s.available)&&s.available>idx+1;if(canAdvance&&now-lastAdvance>=STALL_MS&&now-lastStall>=1000){lastStall=now;log('stall',{index:idx,stalledMs:Math.round(now-lastAdvance),clock:s.clock,ahead:s.ahead,loader:s.loader,path:s.path.last})}},POLL_MS);
   function rafWatch(now){const gap=now-lastRaf;lastRaf=now;if(active&&gap>RAF_GAP_MS)log('main-thread-gap',{gapMs:Math.round(gap),index:compact().index});requestAnimationFrame(rafWatch)}requestAnimationFrame(rafWatch);
-  const hybrid=document.createElement('script');hybrid.src='/hybrid-quality.js?v=0.1.0';hybrid.async=false;document.head.appendChild(hybrid);
+
+  function routeFrames(){return window.__journeyStreamState?.frames||window.__journeySelectedRoute?.frames||[]}
+  async function maybeClassifyTransport(force=false){const list=routeFrames();if(!Array.isArray(list)||!list.length||!window.JourneyTransportClassifier?.classifyRoute)return null;const seq=[...new Set(list.map(f=>String(f?.sequenceId||'unknown')))];const signature=`${list.length}|${seq.join(',')}`;if(!force&&signature===transportSignature)return window.JourneyTransportClassifier.state?.();transportSignature=signature;try{return await window.JourneyTransportClassifier.classifyRoute(list)}catch(error){if(active)log('transport-error',{message:String(error?.message||error)});return null}}
+  window.__journeyTransportReady=new Promise(resolve=>{const script=document.createElement('script');script.src='/transport-classifier.js?v=0.1.0';script.async=false;script.onload=()=>Promise.resolve(maybeClassifyTransport(true)).finally(()=>resolve(true));script.onerror=()=>resolve(false);document.head.appendChild(script)});
+  setInterval(()=>maybeClassifyTransport(false),1500);
+  const hybrid=document.createElement('script');hybrid.src='/hybrid-quality.js?v=0.2.0';hybrid.async=false;document.head.appendChild(hybrid);
 })();
