@@ -118,7 +118,7 @@
 
     async function startDirect(){
       if(directStarted||!selected||!Array.isArray(selected.frames)||selected.frames.length<2){event('direct-start-skipped',{directStarted,hasSelected:!!selected,frames:selected?.frames?.length||0});return}
-      if(!window.JourneyEngine?.startFrames){if(!engineWaitLogged){engineWaitLogged=true;event('engine-wait',{appScript:'/app.js?v=0.1.40'})}setTimeout(startDirect,25);return}
+      if(!window.JourneyEngine?.startFrames){if(!engineWaitLogged){engineWaitLogged=true;event('engine-wait',{appScript:'/app.js?v=0.1.42'})}setTimeout(startDirect,25);return}
       directStarted=true;event('engine-ready-for-direct',{engineState:window.JourneyEngine.getState?.()||null});
       const panel=document.getElementById('startPanel');if(panel)panel.hidden=true;
       const net=document.getElementById('networkLabel');if(net)net.textContent='URL更新 + 実画像16枚先読みを同時開始…';
@@ -148,6 +148,6 @@
     });
   })();
   </script>
-  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/raw-runtime.js?v=0.1.41"></script><script src="/app.js?v=0.1.40" defer></script>
+  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/raw-runtime.js?v=0.1.42"></script><script src="/app.js?v=0.1.42" defer></script>
 </body>
 </html>

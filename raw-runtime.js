@@ -1,125 +1,30 @@
-/* Streetview Journey raw/analysis transport split v0.1.41 */
+/* Streetview Journey raw/analysis transport split v0.1.42 */
 (()=>{
   'use strict';
   if(window.__journeyRawRuntimeInstalled)return;
   window.__journeyRawRuntimeInstalled=true;
-  const VERSION='0.1.41';
-  const RAW_TIMEOUT_MS=2600;
-  const OPTICAL_PAUSE_BELOW=8;
-  const OPTICAL_RESUME_AT=12;
-  const nativeSetTimeout=window.setTimeout.bind(window);
-  const nativeClearTimeout=window.clearTimeout.bind(window);
-  const nativeRIC=window.requestIdleCallback?.bind(window);
-  const nativeCancelRIC=window.cancelIdleCallback?.bind(window);
-  const srcDesc=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');
-  const nativeSetSrc=srcDesc?.set;
-  const timers=new WeakMap();
-  const started=new WeakMap();
-  let opticalAllowed=true;
-
+  const VERSION='0.1.42',RAW_TIMEOUT_MS=2600,OPTICAL_PAUSE_BELOW=8,OPTICAL_RESUME_AT=14,ANALYSIS_RELAXED_AT=16;
+  const nativeSetTimeout=window.setTimeout.bind(window),nativeClearTimeout=window.clearTimeout.bind(window),nativeRIC=window.requestIdleCallback?.bind(window),nativeCancelRIC=window.cancelIdleCallback?.bind(window);
+  const srcDesc=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src'),nativeSetSrc=srcDesc?.set;
+  const timers=new WeakMap(),started=new WeakMap(),analysisQueued=new Set(),analysisActiveImages=new Set();
+  let opticalAllowed=true,analysisGeneration=0,analysisActive=0,analysisQueue=[];
   const now=()=>performance.now();
   function sameOrigin(u){try{return new URL(u,location.href).origin===location.origin}catch{return false}}
-  function unwrapProxy(value){
-    try{
-      const u=new URL(String(value||''),location.href);
-      if(u.origin===location.origin&&u.pathname==='/api/imagery'&&u.searchParams.get('mode')==='mapillary-image'){
-        const source=u.searchParams.get('url');
-        if(source)return source;
-      }
-    }catch{}
-    return String(value||'');
-  }
-  function proxyFor(value){
-    const raw=unwrapProxy(value);
-    if(!raw)return raw;
-    if(sameOrigin(raw))return raw;
-    return `/api/imagery?mode=mapillary-image&url=${encodeURIComponent(raw)}`;
-  }
-  function frameIndexFor(raw){
-    const lists=[window.__journeyStreamState?.frames,window.__journeySelectedRoute?.frames];
-    for(const list of lists){
-      if(!Array.isArray(list))continue;
-      for(let i=0;i<list.length;i++){
-        const f=list[i];
-        if(!f)continue;
-        if(unwrapProxy(f.url)===raw||f.sourceUrl===raw)return i;
-      }
-    }
-    return null;
-  }
-  function emit(phase,detail){
-    try{window.dispatchEvent(new CustomEvent('journey-image-load',{detail:{phase,...detail}}))}catch{}
-  }
-  function clearTimer(im){const t=timers.get(im);if(t){nativeClearTimeout(t);timers.delete(im)}}
-  function installLifecycle(im){
-    if(im.__journeyLifecycleInstalled)return;
-    im.__journeyLifecycleInstalled=true;
-    im.addEventListener('load',()=>{
-      const meta=started.get(im);if(!meta)return;
-      clearTimer(im);started.delete(im);
-      emit('complete',{...meta,elapsedMs:Math.round(now()-meta.startedAt),width:im.naturalWidth||0,height:im.naturalHeight||0});
-    });
-    im.addEventListener('error',()=>{
-      const meta=started.get(im);if(!meta)return;
-      clearTimer(im);started.delete(im);
-      emit('error',{...meta,elapsedMs:Math.round(now()-meta.startedAt)});
-    });
-  }
-  if(nativeSetSrc){
-    Object.defineProperty(HTMLImageElement.prototype,'src',{
-      configurable:srcDesc.configurable,
-      enumerable:srcDesc.enumerable,
-      get:srcDesc.get,
-      set(value){
-        installLifecycle(this);
-        clearTimer(this);
-        const requested=String(value||'');
-        const raw=unwrapProxy(requested);
-        const analysis=this.crossOrigin==='anonymous';
-        const actual=analysis?proxyFor(raw):raw;
-        const purpose=analysis?'analysis':'raw';
-        const index=frameIndexFor(raw);
-        const meta={purpose,index,transport:analysis?'same-origin-proxy':'mapillary-direct',startedAt:now(),timeoutMs:analysis?1800:RAW_TIMEOUT_MS};
-        started.set(this,meta);
-        emit('start',meta);
-        if(!analysis){
-          const timer=nativeSetTimeout(()=>{
-            if(started.get(this)!==meta)return;
-            timers.delete(this);started.delete(this);
-            emit('timeout',{...meta,elapsedMs:Math.round(now()-meta.startedAt)});
-            try{nativeSetSrc.call(this,'')}catch{}
-            try{this.dispatchEvent(new Event('error'))}catch{}
-          },RAW_TIMEOUT_MS);
-          timers.set(this,timer);
-        }
-        nativeSetSrc.call(this,actual);
-      }
-    });
-  }
-
+  function unwrapProxy(value){try{const u=new URL(String(value||''),location.href);if(u.origin===location.origin&&u.pathname==='/api/imagery'&&u.searchParams.get('mode')==='mapillary-image'){const source=u.searchParams.get('url');if(source)return source}}catch{}return String(value||'')}
+  function proxyFor(value){const raw=unwrapProxy(value);if(!raw||sameOrigin(raw))return raw;return `/api/imagery?mode=mapillary-image&url=${encodeURIComponent(raw)}`}
+  function frameIndexFor(raw){for(const list of [window.__journeyStreamState?.frames,window.__journeySelectedRoute?.frames]){if(!Array.isArray(list))continue;for(let i=0;i<list.length;i++){const f=list[i];if(f&&(unwrapProxy(f.url)===raw||f.sourceUrl===raw))return i}}return null}
+  function emit(phase,detail){try{window.dispatchEvent(new CustomEvent('journey-image-load',{detail:{phase,...detail}}))}catch{}}
   function rawAhead(){return Number(window.__journeyPlaybackState?.rawAheadReady??window.__journeyDiagnostics?.rawAheadReady??0)}
-  function updateOpticalGate(){
-    const ahead=rawAhead();
-    if(opticalAllowed&&ahead<OPTICAL_PAUSE_BELOW){opticalAllowed=false;emit('optical-paused',{rawAhead:ahead,threshold:OPTICAL_PAUSE_BELOW})}
-    else if(!opticalAllowed&&ahead>=OPTICAL_RESUME_AT){opticalAllowed=true;emit('optical-resumed',{rawAhead:ahead,threshold:OPTICAL_RESUME_AT})}
-    return opticalAllowed;
-  }
-  window.requestIdleCallback=(callback,options={})=>{
-    let cancelled=false,inner=null;
-    const attempt=deadline=>{
-      if(cancelled)return;
-      if(updateOpticalGate()){callback(deadline);return}
-      schedule();
-    };
-    const schedule=()=>{
-      if(cancelled)return;
-      if(nativeRIC)inner=nativeRIC(attempt,{timeout:Math.max(120,Number(options.timeout)||0)});
-      else inner=nativeSetTimeout(()=>attempt({didTimeout:true,timeRemaining:()=>0}),120);
-    };
-    schedule();
-    return{__journeyIdle:true,cancel(){cancelled=true;if(nativeRIC&&nativeCancelRIC&&inner!=null){try{nativeCancelRIC(inner)}catch{}}else if(inner!=null)nativeClearTimeout(inner)}};
-  };
+  function clearTimer(im){const t=timers.get(im);if(t){nativeClearTimeout(t);timers.delete(im)}}
+  function finishAnalysis(im){if(analysisActiveImages.delete(im))analysisActive=Math.max(0,analysisActive-1);analysisQueued.delete(im);pumpAnalysis()}
+  function installLifecycle(im){if(im.__journeyLifecycleInstalled)return;im.__journeyLifecycleInstalled=true;im.addEventListener('load',()=>{const meta=started.get(im);if(!meta)return;clearTimer(im);started.delete(im);if(meta.purpose==='analysis')finishAnalysis(im);if(meta.generation!=null&&meta.generation!==analysisGeneration)return;emit('complete',{...meta,elapsedMs:Math.round(now()-meta.startedAt),width:im.naturalWidth||0,height:im.naturalHeight||0})});im.addEventListener('error',()=>{const meta=started.get(im);if(!meta)return;clearTimer(im);started.delete(im);if(meta.purpose==='analysis')finishAnalysis(im);if(meta.generation!=null&&meta.generation!==analysisGeneration)return;emit('error',{...meta,elapsedMs:Math.round(now()-meta.startedAt)})})}
+  function analysisCapacity(){if(!opticalAllowed)return 0;return rawAhead()>=ANALYSIS_RELAXED_AT&&Number(window.__journeyDiagnostics?.rawActive||0)===0?2:1}
+  function cancelAnalysis(reason='raw-low'){analysisGeneration++;const queued=analysisQueue;analysisQueue=[];for(const q of queued){analysisQueued.delete(q.im);started.delete(q.im);try{nativeSetSrc.call(q.im,'')}catch{};nativeSetTimeout(()=>{try{q.im.dispatchEvent(new Event('error'))}catch{}},0)}for(const im of [...analysisActiveImages]){analysisActiveImages.delete(im);analysisActive=Math.max(0,analysisActive-1);started.delete(im);try{nativeSetSrc.call(im,'')}catch{};nativeSetTimeout(()=>{try{im.dispatchEvent(new Event('error'))}catch{}},0)}emit('analysis-generation',{generation:analysisGeneration,reason})}
+  function updateOpticalGate(){const ahead=rawAhead();if(opticalAllowed&&ahead<OPTICAL_PAUSE_BELOW){opticalAllowed=false;cancelAnalysis('raw-below-8');emit('optical-paused',{rawAhead:ahead,threshold:OPTICAL_PAUSE_BELOW,generation:analysisGeneration})}else if(!opticalAllowed&&ahead>=OPTICAL_RESUME_AT){opticalAllowed=true;analysisGeneration++;emit('optical-resumed',{rawAhead:ahead,threshold:OPTICAL_RESUME_AT,generation:analysisGeneration});pumpAnalysis()}return opticalAllowed}
+  function pumpAnalysis(){updateOpticalGate();const cap=analysisCapacity();while(analysisActive<cap&&analysisQueue.length){const q=analysisQueue.shift();analysisQueued.delete(q.im);if(q.generation!==analysisGeneration||!opticalAllowed){started.delete(q.im);continue}analysisActive++;analysisActiveImages.add(q.im);started.set(q.im,q.meta);emit('start',q.meta);nativeSetSrc.call(q.im,q.actual)}}
+  if(nativeSetSrc){Object.defineProperty(HTMLImageElement.prototype,'src',{configurable:srcDesc.configurable,enumerable:srcDesc.enumerable,get:srcDesc.get,set(value){installLifecycle(this);clearTimer(this);const requested=String(value||''),raw=unwrapProxy(requested),analysis=this.crossOrigin==='anonymous',actual=analysis?proxyFor(raw):raw,purpose=analysis?'analysis':'raw',index=frameIndexFor(raw);if(analysis){updateOpticalGate();const generation=analysisGeneration,meta={purpose,index,transport:'same-origin-proxy',startedAt:now(),timeoutMs:1800,generation};if(!opticalAllowed){emit('analysis-blocked',{...meta,rawAhead:rawAhead()});nativeSetTimeout(()=>{try{this.dispatchEvent(new Event('error'))}catch{}},0);return}analysisQueue.push({im:this,actual,meta,generation});analysisQueued.add(this);pumpAnalysis();return}const meta={purpose,index,transport:'mapillary-direct',startedAt:now(),timeoutMs:RAW_TIMEOUT_MS};started.set(this,meta);emit('start',meta);const timer=nativeSetTimeout(()=>{if(started.get(this)!==meta)return;timers.delete(this);started.delete(this);emit('timeout',{...meta,elapsedMs:Math.round(now()-meta.startedAt)});try{nativeSetSrc.call(this,'')}catch{};try{this.dispatchEvent(new Event('error'))}catch{}},RAW_TIMEOUT_MS);timers.set(this,timer);nativeSetSrc.call(this,actual)}})}
+  window.requestIdleCallback=(callback,options={})=>{let cancelled=false,inner=null;const attempt=deadline=>{if(cancelled)return;if(updateOpticalGate()){callback(deadline);return}schedule()};const schedule=()=>{if(cancelled)return;if(nativeRIC)inner=nativeRIC(attempt,{timeout:Math.max(120,Number(options.timeout)||0)});else inner=nativeSetTimeout(()=>attempt({didTimeout:true,timeRemaining:()=>0}),120)};schedule();return{__journeyIdle:true,cancel(){cancelled=true;if(nativeRIC&&nativeCancelRIC&&inner!=null){try{nativeCancelRIC(inner)}catch{}}else if(inner!=null)nativeClearTimeout(inner)}}};
   window.cancelIdleCallback=handle=>{if(handle?.__journeyIdle)return handle.cancel();if(nativeCancelRIC)return nativeCancelRIC(handle);nativeClearTimeout(handle)};
-
-  window.__journeyRawRuntime={version:VERSION,rawTimeoutMs:RAW_TIMEOUT_MS,opticalPauseBelow:OPTICAL_PAUSE_BELOW,opticalResumeAt:OPTICAL_RESUME_AT,get opticalAllowed(){return opticalAllowed}};
+  const gatePoll=nativeSetTimeout;setInterval(()=>{const before=opticalAllowed;updateOpticalGate();if(opticalAllowed&&before)pumpAnalysis()},80);
+  window.__journeyRawRuntime={version:VERSION,rawTimeoutMs:RAW_TIMEOUT_MS,opticalPauseBelow:OPTICAL_PAUSE_BELOW,opticalResumeAt:OPTICAL_RESUME_AT,analysisRelaxedAt:ANALYSIS_RELAXED_AT,get opticalAllowed(){return opticalAllowed},get analysisGeneration(){return analysisGeneration},get analysisActive(){return analysisActive},get analysisQueued(){return analysisQueue.length}};
 })();
