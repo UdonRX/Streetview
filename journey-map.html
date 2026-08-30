@@ -31,19 +31,34 @@
   <script>
   (()=>{
     const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com';
-    const FETCH_BATCH=48,MAX_RETRY=2,FETCH_TRIGGER_AHEAD=64,SAVE_INTERVAL=3000,STREAM_POLL_MS=180;
-    let selected=null,lastSave=0,streamStarted=false,directStarted=false;
-    try{selected=JSON.parse(sessionStorage.getItem(KEY)||'null')}catch{}
+    const FETCH_BATCH=48,MAX_RETRY=2,FETCH_TRIGGER_AHEAD=64,SAVE_INTERVAL=3000,STREAM_POLL_MS=180,PROBE_TIMEOUT_MS=9000;
+    const traceStarted=performance.now(),trace=window.__journeyStartupTrace={schema:'streetview-journey-startup-diagnostic-v1',version:'0.1.33-log',startedAt:new Date().toISOString(),events:[]};
+    const event=(name,data={})=>{const row={tMs:Math.round(performance.now()-traceStarted),name,...data};trace.events.push(row);if(trace.events.length>120)trace.events.shift();console.info('[JourneyStartup]',row);return row};
+    const safeUrl=u=>{try{const x=new URL(String(u||''),location.href);return{present:!!u,protocol:x.protocol,host:x.host,path:x.pathname.slice(-110),queryKeys:[...x.searchParams.keys()].slice(0,12),length:String(u||'').length}}catch{return{present:!!u,invalid:true,length:String(u||'').length}}};
+    const frameSummary=(f,i)=>({index:i,id:String(f?.id||'').slice(0,48),sequenceId:String(f?.sequenceId||'').slice(0,48),sequenceIndex:f?.sequenceIndex??null,provider:f?.provider||null,hasCoords:Number.isFinite(f?.lat)&&Number.isFinite(f?.lng),heading:Number.isFinite(f?.heading)?f.heading:null,url:safeUrl(f?.url)});
+    let selected=null,lastSave=0,streamStarted=false,directStarted=false,engineWaitLogged=false;
+    try{selected=JSON.parse(sessionStorage.getItem(KEY)||'null');event('session-route-read',{ok:!!selected})}catch(e){event('session-route-parse-error',{message:String(e?.message||e)})}
     window.__journeySelectedRoute=selected;
     window.__journeyValidationRoute=selected?{id:'map-selected',name:selected.provider||selected.source||'Selected',kind:'地図選択',mode:'fixed',sequenceId:selected.sequenceId||null,lat:selected.frames?.[0]?.lat??null,lng:selected.frames?.[0]?.lng??null}:null;
     window.__journeyStreamState={frames:selected?.frames||[],active:false,complete:!selected?.streamPending?.length,total:selected?.selection?.totalImageIds||selected?.frames?.length||0,failed:false};
+    event('selected-route-summary',{provider:selected?.provider||selected?.source||null,frames:Array.isArray(selected?.frames)?selected.frames.length:-1,pending:Array.isArray(selected?.streamPending)?selected.streamPending.length:-1,total:selected?.selection?.totalImageIds||null,sequences:Array.isArray(selected?.sequenceIds)?selected.sequenceIds.length:null,firstFrames:(selected?.frames||[]).slice(0,3).map(frameSummary),invalidUrlCount:Array.isArray(selected?.frames)?selected.frames.filter(f=>!f?.url).length:null});
     const nativeFetch=window.fetch.bind(window);
     const token=()=>{try{return localStorage.getItem(TOKEN_KEY)||''}catch{return''}};
+    function resourceTiming(url){try{const rows=performance.getEntriesByName(url);const r=rows[rows.length-1];return r?{duration:Math.round(r.duration),transferSize:r.transferSize||0,encodedBodySize:r.encodedBodySize||0,decodedBodySize:r.decodedBodySize||0,initiatorType:r.initiatorType||null}:null}catch{return null}}
+    function probeImage(f,i){
+      if(!f?.url){event('probe-invalid-url',{index:i});return}
+      const started=performance.now(),im=new Image();let done=false;
+      const finish=(status,extra={})=>{if(done)return;done=true;clearTimeout(timer);event(`probe-${status}`,{index:i,elapsedMs:Math.round(performance.now()-started),url:safeUrl(f.url),timing:resourceTiming(f.url),...extra})};
+      const timer=setTimeout(()=>finish('timeout'),PROBE_TIMEOUT_MS);
+      im.decoding='async';im.referrerPolicy='no-referrer';im.onload=()=>finish('load',{naturalWidth:im.naturalWidth,naturalHeight:im.naturalHeight});im.onerror=()=>finish('error');im.src=f.url;
+      event('probe-start',{index:i,url:safeUrl(f.url)});
+    }
     async function batchMeta(refs){
       const t=token();if(!t)throw new Error('Mapillary token missing');
       const out=new Array(refs.length).fill(null),fields='id,sequence,captured_at,computed_geometry,compass_angle,thumb_2048_url,is_pano';
       const ids=refs.map(r=>r.id).join(','),url=`${GRAPH}/images?image_ids=${encodeURIComponent(ids)}&fields=${encodeURIComponent(fields)}`;
-      try{const r=await nativeFetch(url,{headers:{Authorization:`OAuth ${t}`}}),j=await r.json().catch(()=>({}));if(!r.ok||j?.error)return out;const by=new Map((j?.data||[]).map(x=>[String(x.id),x]));refs.forEach((ref,i)=>{out[i]=by.get(String(ref.id))||null})}catch{}
+      const started=performance.now();event('stream-meta-request',{count:refs.length});
+      try{const r=await nativeFetch(url,{headers:{Authorization:`OAuth ${t}`}}),j=await r.json().catch(()=>({}));event('stream-meta-response',{status:r.status,ok:r.ok,elapsedMs:Math.round(performance.now()-started),dataCount:Array.isArray(j?.data)?j.data.length:0,apiError:j?.error?.message||null});if(!r.ok||j?.error)return out;const by=new Map((j?.data||[]).map(x=>[String(x.id),x]));refs.forEach((ref,i)=>{out[i]=by.get(String(ref.id))||null})}catch(e){event('stream-meta-exception',{elapsedMs:Math.round(performance.now()-started),message:String(e?.message||e)})}
       return out;
     }
     function frame(m,r){const c=m?.computed_geometry?.coordinates;if(!Array.isArray(c)||c.length<2||!m?.thumb_2048_url)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,url:m.thumb_2048_url,provider:'Mapillary',capturedAt:m.captured_at||null}}
@@ -53,8 +68,8 @@
     function updateMeta(){if(!selected)return;const done=selected.frames?.length||0,pending=selected.streamPending?.length||0,total=selected.selection?.totalImageIds||done+pending;const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=pending?`${done}件URL準備済み / 全${total}件予定`:`${done}枚の連続画像`;syncState()}
     async function waitUntilMoreNeeded(){while(selected?.streamPending?.length){const ahead=(selected.frames?.length||0)-playbackIndex()-1;if(ahead<=FETCH_TRIGGER_AHEAD)return;await new Promise(r=>setTimeout(r,STREAM_POLL_MS))}}
     async function continueStream(){
-      if(streamStarted)return;streamStarted=true;syncState();
-      if(!selected||selected.provider!=='Mapillary'||!Array.isArray(selected.streamPending)||!selected.streamPending.length){syncState();return}
+      if(streamStarted)return;streamStarted=true;syncState();event('stream-start',{pending:selected?.streamPending?.length||0,available:selected?.frames?.length||0});
+      if(!selected||selected.provider!=='Mapillary'||!Array.isArray(selected.streamPending)||!selected.streamPending.length){syncState();event('stream-not-needed');return}
       selected.streamOpen=true;syncState();
       try{
         while(selected.streamPending.length){
@@ -63,23 +78,40 @@
           for(let i=0;i<refs.length;i++){const f=meta[i]?frame(meta[i],refs[i]):null;if(f)frames.push(f);else{const rr={...refs[i],retry:(refs[i].retry||0)+1};if(rr.retry<=MAX_RETRY)retry.push(rr)}}
           if(frames.length)selected.frames.push(...frames);
           if(retry.length)selected.streamPending.push(...retry);
+          event('stream-batch-added',{added:frames.length,retry:retry.length,available:selected.frames.length,pending:selected.streamPending.length});
           updateMeta();save(false);
           await new Promise(r=>setTimeout(r,STREAM_POLL_MS));
         }
-      }catch{window.__journeyStreamState.failed=true}
-      finally{selected.streamOpen=false;syncState();updateMeta();save(true)}
+      }catch(e){window.__journeyStreamState.failed=true;event('stream-failed',{message:String(e?.message||e)})}
+      finally{selected.streamOpen=false;syncState();updateMeta();save(true);event('stream-finished',{available:selected?.frames?.length||0,pending:selected?.streamPending?.length||0,failed:!!window.__journeyStreamState.failed})}
     }
-    function installCompactLogButton(){const box=document.getElementById('journeyDiag'),btn=document.getElementById('jdCopy');if(box)box.style.setProperty('display','none','important');if(!btn)return;btn.textContent='ログコピー';btn.style.cssText='position:fixed;z-index:30;right:10px;top:calc(env(safe-area-inset-top) + 62px);width:auto;height:30px;padding:0 9px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(5,8,12,.58);color:#fff;font:700 9px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:auto';document.body.appendChild(btn)}
+    function startupSnapshot(){
+      const s=window.__journeyStreamState||{},p=window.__journeyPlaybackState||{},engine=window.JourneyEngine;
+      return{schema:trace.schema,version:trace.version,exportedAt:new Date().toISOString(),page:{href:location.pathname+location.search,visibility:document.visibilityState,online:navigator.onLine,userAgent:navigator.userAgent,connection:navigator.connection?{effectiveType:navigator.connection.effectiveType,downlink:navigator.connection.downlink,rtt:navigator.connection.rtt,saveData:navigator.connection.saveData}:null,serviceWorker:{supported:'serviceWorker'in navigator,controlled:!!navigator.serviceWorker?.controller,scriptURL:navigator.serviceWorker?.controller?.scriptURL||null}},selected:{provider:selected?.provider||selected?.source||null,frames:selected?.frames?.length||0,pending:selected?.streamPending?.length||0,total:selected?.selection?.totalImageIds||0,sequences:selected?.sequenceIds?.length||0,invalidUrlCount:Array.isArray(selected?.frames)?selected.frames.filter(f=>!f?.url).length:null,firstFrames:(selected?.frames||[]).slice(0,3).map(frameSummary)},engine:{available:!!engine,startFrames:typeof engine?.startFrames==='function',state:typeof engine?.getState==='function'?engine.getState():null},stream:{active:!!s.active,complete:!!s.complete,total:s.total||0,frameCount:Array.isArray(s.frames)?s.frames.length:0,failed:!!s.failed},playback:p,dom:{frameLabel:document.getElementById('frameLabel')?.textContent||null,networkLabel:document.getElementById('networkLabel')?.textContent||null,errorVisible:!document.getElementById('errorPanel')?.hidden,errorMessage:document.getElementById('errorMessage')?.textContent||null,layerASrc:safeUrl(document.getElementById('layerA')?.currentSrc||document.getElementById('layerA')?.src||'')},events:trace.events.slice(-120)};
+    }
+    window.__copyJourneyStartupLog=async()=>{const text=JSON.stringify(startupSnapshot(),null,2);try{await navigator.clipboard.writeText(text);return true}catch{try{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();return true}catch{return false}}};
+    function installCompactLogButton(){
+      const box=document.getElementById('journeyDiag'),btn=document.getElementById('jdCopy');if(box)box.style.setProperty('display','none','important');if(!btn)return;
+      btn.textContent='起動ログコピー';btn.style.cssText='position:fixed;z-index:30;right:10px;top:calc(env(safe-area-inset-top) + 62px);width:auto;height:30px;padding:0 9px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(5,8,12,.58);color:#fff;font:700 9px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:auto';document.body.appendChild(btn);
+      btn.addEventListener('click',async e=>{e.preventDefault();e.stopImmediatePropagation();const ok=await window.__copyJourneyStartupLog();btn.textContent=ok?'コピー完了':'コピー失敗';setTimeout(()=>btn.textContent='起動ログコピー',1200)},true);
+    }
     function startDirect(){
-      if(directStarted||!selected||!Array.isArray(selected.frames)||selected.frames.length<2)return;
-      if(!window.JourneyEngine?.startFrames){setTimeout(startDirect,25);return}
+      if(directStarted||!selected||!Array.isArray(selected.frames)||selected.frames.length<2){event('direct-start-skipped',{directStarted,hasSelected:!!selected,frames:selected?.frames?.length||0});return}
+      if(!window.JourneyEngine?.startFrames){if(!engineWaitLogged){engineWaitLogged=true;event('engine-wait',{appScript:'/app.js?v=0.1.32'})}setTimeout(startDirect,25);return}
+      event('engine-ready-for-direct',{engineState:window.JourneyEngine.getState?.()||null});
       directStarted=true;
       const panel=document.getElementById('startPanel');if(panel)panel.hidden=true;
       const net=document.getElementById('networkLabel');if(net)net.textContent=`初期バッファ ${selected.frames.length}枚から再生開始`;
-      window.addEventListener('journey-playback-started',()=>{continueStream().catch(()=>{window.__journeyStreamState.failed=true;syncState()})},{once:true});
-      window.JourneyEngine.startFrames(selected.frames,window.__journeyStreamState).catch(()=>{directStarted=false});
+      selected.frames.slice(0,3).forEach(probeImage);
+      window.addEventListener('journey-playback-started',e=>{event('playback-started-event',{detail:e.detail||null,engineState:window.JourneyEngine?.getState?.()||null});continueStream().catch(err=>{window.__journeyStreamState.failed=true;syncState();event('continue-stream-rejected',{message:String(err?.message||err)})})},{once:true});
+      const started=performance.now();event('startFrames-call',{frames:selected.frames.length,streamTotal:window.__journeyStreamState.total,first:frameSummary(selected.frames[0],0)});
+      Promise.resolve(window.JourneyEngine.startFrames(selected.frames,window.__journeyStreamState)).then(()=>event('startFrames-resolved',{elapsedMs:Math.round(performance.now()-started),engineState:window.JourneyEngine?.getState?.()||null})).catch(e=>{directStarted=false;event('startFrames-rejected',{elapsedMs:Math.round(performance.now()-started),name:e?.name||null,message:String(e?.message||e),engineState:window.JourneyEngine?.getState?.()||null})});
     }
+    window.addEventListener('journey-engine-ready',e=>event('journey-engine-ready-event',{detail:e.detail||null}));
+    window.addEventListener('error',e=>event('window-error',{message:e.message||null,filename:e.filename?.split('/').pop()||null,line:e.lineno||null,column:e.colno||null}));
+    window.addEventListener('unhandledrejection',e=>event('unhandled-rejection',{message:String(e.reason?.message||e.reason||'unknown')}));
     window.addEventListener('DOMContentLoaded',()=>{
+      event('dom-content-loaded',{swControlled:!!navigator.serviceWorker?.controller});
       const provider=selected?.provider||selected?.source||'Coverage',count=Array.isArray(selected?.frames)?selected.frames.length:0,total=selected?.selection?.totalImageIds||count+(selected?.streamPending?.length||0),seq=selected?.sequenceId||'—';
       const badge=document.getElementById('sourceBadge');if(badge)badge.textContent=provider;
       const name=document.getElementById('selectedRouteName');if(name)name.textContent=`${provider} / ${selected?.sequenceIds?.length>1?selected.sequenceIds.length+' sequences':'Sequence '+seq}`;
