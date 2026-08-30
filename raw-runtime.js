@@ -15,7 +15,7 @@
   function unwrapProxy(value){try{const u=new URL(String(value||''),location.href);if(u.origin===location.origin&&u.pathname==='/api/imagery'&&u.searchParams.get('mode')==='mapillary-image'){const source=u.searchParams.get('url');if(source)return source}}catch{}return String(value||'')}
   function proxyFor(value){const raw=unwrapProxy(value);if(!raw||sameOrigin(raw))return raw;return `/api/imagery?mode=mapillary-image&url=${encodeURIComponent(raw)}`}
   function routeLists(){return [window.__journeyStreamState?.frames,window.__journeySelectedRoute?.frames].filter(Array.isArray)}
-  function currentRouteKey(){const list=routeLists()[0]||[],first=list[0],last=list[list.length-1];return `${String(first?.sequenceId||'')}|${String(first?.id||'')}|${String(last?.id||'')}|${list.length}`}
+  function currentRouteKey(){const list=routeLists()[0]||[],first=list[0];return `${String(first?.sequenceId||'')}|${String(first?.id||'')}`}
   function ensureRouteGeneration(){const key=currentRouteKey();if(key&&routeKey&&key!==routeKey){readyRawIndices.clear();analysisGeneration++;analysisQueue=[];analysisActiveImages.clear();analysisActive=0}if(key)routeKey=key}
   function frameAt(i){for(const list of routeLists())if(list[i])return list[i];return null}
   function frameIndexFor(raw){for(const list of routeLists()){for(let i=0;i<list.length;i++){const f=list[i];if(f&&(unwrapProxy(f.url)===raw||f.sourceUrl===raw||f.analysisUrl===raw))return i}}return null}
