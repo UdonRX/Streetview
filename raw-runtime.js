@@ -7,8 +7,8 @@
   const VERSION='0.1.46';
   const RAW_TIMEOUT_MS=2600,OPTICAL_PAUSE_BELOW=8,OPTICAL_RESUME_AT=14,ANALYSIS_RELAXED_AT=16;
   const LIGHT_FIELD_1024='thumb_1024_url',LIGHT_FIELD_256='thumb_256_url',GRAPH='https://graph.mapillary.com',TOKEN_KEY='streetview:mapillary-token';
-  const PREFETCH_BASE_CONCURRENCY=4,PREFETCH_EMERGENCY_BURST=2,PREFETCH_AHEAD=48;
-  const CONTINUITY_256_AHEAD=36,QUALITY_1024_AHEAD=12,CONTINUITY_LOW_WATER=12,QUALITY_ENABLE_AT=18;
+  const PREFETCH_BASE_CONCURRENCY=4,PREFETCH_EMERGENCY_BURST=2,PREFETCH_AHEAD=48,PREFETCH_QUALITY_CONCURRENCY=1;
+  const CONTINUITY_256_AHEAD=36,QUALITY_1024_AHEAD=10,CONTINUITY_LOW_WATER=12,QUALITY_ENABLE_AT=14;
 
   const nativeSetTimeout=window.setTimeout.bind(window),nativeClearTimeout=window.clearTimeout.bind(window),nativeFetch=window.fetch.bind(window),nativeRIC=window.requestIdleCallback?.bind(window),nativeCancelRIC=window.cancelIdleCallback?.bind(window);
   const srcDesc=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src'),nativeSetSrc=srcDesc?.set;
@@ -16,7 +16,8 @@
   const light1024Urls=new Map(),light256Urls=new Map(),lightMisses=new Set(),rawVariantFailures=new Map(),readyVariants=new Map();
   const prefetchQueued=new Set(),prefetchInflight=new Set();
   let opticalAllowed=true,analysisGeneration=0,analysisActive=0,analysisQueue=[],lightRefreshPromise=null,lightDisabled=false,routeKey='';
-  let prefetchQueue=[],prefetchActive=0,prefetchEmergencyActive=0;
+  let prefetchQueue=[],prefetchActive=0,prefetchEmergencyActive=0,prefetchQualityActive=0;
+  let qualityLayer=null,qualityLayerIndex=-1,qualityUpgradeCount=0;
 
   const now=()=>performance.now();
   function sameOrigin(u){try{return new URL(u,location.href).origin===location.origin}catch{return false}}
@@ -37,10 +38,10 @@
       if(f.prewarmed){if(f.prewarmedVariant==='1024')markVariantReady(i,'1024');else markVariantReady(i,'256')}
     }
   }
-  function resetPrefetch(){prefetchQueue=[];prefetchQueued.clear();prefetchInflight.clear();readyVariants.clear();prefetchActive=0;prefetchEmergencyActive=0}
+  function resetPrefetch(){prefetchQueue=[];prefetchQueued.clear();prefetchInflight.clear();readyVariants.clear();prefetchActive=0;prefetchEmergencyActive=0;prefetchQualityActive=0}
   function ensureRouteGeneration(){
     const key=currentRouteKey();
-    if(key&&routeKey&&key!==routeKey){readyRawIndices.clear();activeRawIndices.clear();analysisGeneration++;analysisQueue=[];analysisActiveImages.clear();analysisActive=0;rawVariantFailures.clear();resetPrefetch()}
+    if(key&&routeKey&&key!==routeKey){readyRawIndices.clear();activeRawIndices.clear();analysisGeneration++;analysisQueue=[];analysisActiveImages.clear();analysisActive=0;rawVariantFailures.clear();resetPrefetch();hideQualityLayer()}
     if(key)routeKey=key;
     seedLightUrls();
   }
@@ -113,14 +114,14 @@
     for(let offset=1;offset<=PREFETCH_AHEAD;offset++){
       const index=base+offset,f=frameAt(index);if(!f)break;const id=String(f.id||''),u256=id?light256Urls.get(id):null,u1024=id?light1024Urls.get(id):null;
       if(offset<=CONTINUITY_256_AHEAD&&u256&&!variantFailed(id,'256-continuity'))queueTask(index,'256',u256,offset<=CONTINUITY_LOW_WATER?offset-100:offset,false);
-      if(offset<=QUALITY_1024_AHEAD&&continuity>=QUALITY_ENABLE_AT&&u1024&&!variantFailed(id,'1024'))queueTask(index,'1024',u1024,200+offset,false);
+      if(offset<=QUALITY_1024_AHEAD&&continuity>=QUALITY_ENABLE_AT&&u1024&&!variantFailed(id,'1024'))queueTask(index,'1024',u1024,40+offset,false);
     }
     prefetchQueue.sort((a,b)=>a.priority-b.priority||a.index-b.index);
   }
   function startPrefetch(task){
-    prefetchQueued.delete(task.key);prefetchInflight.add(task.key);prefetchActive++;if(task.emergency)prefetchEmergencyActive++;
+    prefetchQueued.delete(task.key);prefetchInflight.add(task.key);prefetchActive++;if(task.emergency)prefetchEmergencyActive++;if(task.variant==='1024')prefetchQualityActive++;
     const im=new Image();im.decoding='async';im.referrerPolicy='no-referrer';let done=false;
-    const finish=ok=>{if(done)return;done=true;nativeClearTimeout(timer);prefetchInflight.delete(task.key);prefetchActive=Math.max(0,prefetchActive-1);if(task.emergency)prefetchEmergencyActive=Math.max(0,prefetchEmergencyActive-1);if(ok)markVariantReady(task.index,task.variant);pumpPrefetch()};
+    const finish=ok=>{if(done)return;done=true;nativeClearTimeout(timer);prefetchInflight.delete(task.key);prefetchActive=Math.max(0,prefetchActive-1);if(task.emergency)prefetchEmergencyActive=Math.max(0,prefetchEmergencyActive-1);if(task.variant==='1024')prefetchQualityActive=Math.max(0,prefetchQualityActive-1);if(ok)markVariantReady(task.index,task.variant);pumpPrefetch()};
     im.onload=()=>finish(true);im.onerror=()=>finish(false);
     const timer=nativeSetTimeout(()=>{try{nativeSetSrc.call(im,'')}catch{}finish(false)},RAW_TIMEOUT_MS);
     try{nativeSetSrc.call(im,task.url)}catch{finish(false)}
@@ -134,7 +135,12 @@
       const urgent=urgentIndex>=0&&continuity<CONTINUITY_LOW_WATER;
       const cap=PREFETCH_BASE_CONCURRENCY+(urgent?PREFETCH_EMERGENCY_BURST:0);
       if(prefetchActive>=cap)break;
-      const idx=urgent?urgentIndex:0,task=prefetchQueue.splice(idx,1)[0];
+      let idx=urgent?urgentIndex:-1;
+      if(idx<0&&continuity>=QUALITY_ENABLE_AT&&prefetchQualityActive<PREFETCH_QUALITY_CONCURRENCY)idx=prefetchQueue.findIndex(x=>x.variant==='1024');
+      if(idx<0)idx=prefetchQueue.findIndex(x=>x.variant==='256');
+      if(idx<0)idx=0;
+      const task=prefetchQueue.splice(idx,1)[0];
+      if(task.variant==='1024'&&prefetchQualityActive>=PREFETCH_QUALITY_CONCURRENCY){prefetchQueue.push(task);prefetchQueue.sort((a,b)=>a.priority-b.priority||a.index-b.index);break}
       task.emergency=urgent&&task.variant==='256';
       startPrefetch(task);
     }
@@ -169,6 +175,22 @@
     startRaw(this,raw,index);
   }})}
 
+  function qualityUrlFor(index){
+    ensureRouteGeneration();const f=frameAt(index),id=String(f?.id||'');if(!id||!variantReady(index,'256')||!variantReady(index,'1024')||variantFailed(id,'1024'))return null;return light1024Urls.get(id)||f?.raw1024Url||f?.thumb_1024_url||null;
+  }
+  function ensureQualityLayer(){
+    if(qualityLayer?.isConnected)return qualityLayer;const viewer=document.getElementById('viewer');if(!viewer)return null;
+    const layer=document.createElement('img');layer.id='journeyQualityLayer';layer.alt='';layer.decoding='async';layer.draggable=false;
+    Object.assign(layer.style,{position:'absolute',inset:'0',width:'100%',height:'100%',objectFit:'cover',opacity:'0',zIndex:'1',pointerEvents:'none',transition:'opacity 35ms linear'});
+    const flow=document.getElementById('flowCanvas');if(flow)viewer.insertBefore(layer,flow);else viewer.appendChild(layer);qualityLayer=layer;return layer;
+  }
+  function hideQualityLayer(){if(qualityLayer){qualityLayer.style.opacity='0';qualityLayerIndex=-1}}
+  function showQualityLayer(index,path){
+    const layer=ensureQualityLayer();if(!layer)return;layer.style.opacity='0';qualityLayerIndex=-1;if(path&&path!=='raw-fallback')return;
+    const url=qualityUrlFor(index);if(!url)return;const expected=index;layer.onload=()=>{if(currentIndex()!==expected)return;qualityLayerIndex=expected;qualityUpgradeCount++;layer.style.opacity='1';emit('quality-upgrade',{index:expected,variant:'1024',width:layer.naturalWidth||0,height:layer.naturalHeight||0})};layer.onerror=()=>{layer.style.opacity='0'};layer.src=url;
+  }
+  window.addEventListener('journey-frame-presented',e=>{const d=e.detail||{},index=Number(d.index);hideQualityLayer();if(Number.isFinite(index))nativeSetTimeout(()=>showQualityLayer(index,d.path||window.__journeyDiagnostics?.lastRenderPath||null),0)});
+
   window.requestIdleCallback=(callback,options={})=>{let cancelled=false,inner=null;const attempt=deadline=>{if(cancelled)return;if(updateOpticalGate()){callback(deadline);return}schedule()};const schedule=()=>{if(cancelled)return;if(nativeRIC)inner=nativeRIC(attempt,{timeout:Math.max(120,Number(options.timeout)||0)});else inner=nativeSetTimeout(()=>attempt({didTimeout:true,timeRemaining:()=>0}),120)};schedule();return{__journeyIdle:true,cancel(){cancelled=true;if(nativeRIC&&nativeCancelRIC&&inner!=null){try{nativeCancelRIC(inner)}catch{}}else if(inner!=null)nativeClearTimeout(inner)}}};
   window.cancelIdleCallback=handle=>{if(handle?.__journeyIdle)return handle.cancel();if(nativeCancelRIC)return nativeCancelRIC(handle);nativeClearTimeout(handle)};
 
@@ -176,10 +198,11 @@
   ensureRouteGeneration();refreshLightUrls();schedulePrefetch();
   window.__journeyRawRuntime={
     version:VERSION,rawTimeoutMs:RAW_TIMEOUT_MS,opticalPauseBelow:OPTICAL_PAUSE_BELOW,opticalResumeAt:OPTICAL_RESUME_AT,analysisRelaxedAt:ANALYSIS_RELAXED_AT,
-    rawVariant:'256 continuity lane + 1024 quality lane + source fallback',prefetchBaseConcurrency:PREFETCH_BASE_CONCURRENCY,prefetchEmergencyBurst:PREFETCH_EMERGENCY_BURST,prefetchAhead:PREFETCH_AHEAD,
+    rawVariant:'256 continuity lane + 1024 quality lane + source fallback',prefetchBaseConcurrency:PREFETCH_BASE_CONCURRENCY,prefetchEmergencyBurst:PREFETCH_EMERGENCY_BURST,prefetchAhead:PREFETCH_AHEAD,prefetchQualityConcurrency:PREFETCH_QUALITY_CONCURRENCY,
     get opticalAllowed(){return opticalAllowed},get analysisGeneration(){return analysisGeneration},get analysisActive(){return analysisActive},get analysisQueued(){return analysisQueue.length},
     get contiguousRawAhead(){return contiguousRawAhead()},get continuity256Ahead(){return contiguousVariantAhead('256',CONTINUITY_256_AHEAD)},get quality1024Ahead(){return contiguousVariantAhead('1024',QUALITY_1024_AHEAD)},
     get lightUrlCount(){return light1024Urls.size},get emergencyUrlCount(){return light256Urls.size},get lightDisabled(){return lightDisabled},
-    get rawVariantFailureCount(){let n=0;for(const s of rawVariantFailures.values())n+=s.size;return n},get prefetchActive(){return prefetchActive},get prefetchEmergencyActive(){return prefetchEmergencyActive},get prefetchQueued(){return prefetchQueue.length}
+    get rawVariantFailureCount(){let n=0;for(const s of rawVariantFailures.values())n+=s.size;return n},get prefetchActive(){return prefetchActive},get prefetchEmergencyActive(){return prefetchEmergencyActive},get prefetchQualityActive(){return prefetchQualityActive},get prefetchQueued(){return prefetchQueue.length},
+    get qualityLayerIndex(){return qualityLayerIndex},get qualityUpgradeCount(){return qualityUpgradeCount},qualityUrlFor
   };
 })();
