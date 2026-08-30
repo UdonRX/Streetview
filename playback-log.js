@@ -2,22 +2,25 @@
 (()=>{
   if(window.__journeyPlaybackLoggerInstalled)return;
   window.__journeyPlaybackLoggerInstalled=true;
-  const VERSION='0.1.39-priority-log',MAX_EVENTS=220,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
+  const VERSION='0.1.41-loadsplit-log',MAX_EVENTS=260,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
   const trace={schema:'streetview-journey-playback-diagnostic-v2',version:VERSION,startedAt:null,events:[]};
   let active=false,t0=0,lastIndex=null,lastAdvance=0,lastStall=0,lastRaf=performance.now();
   const round=v=>Number.isFinite(v)?Math.round(v*10)/10:null;
+  const loadStats={raw:{start:0,complete:0,timeout:0,error:0,totalMs:0,maxMs:0},analysis:{start:0,complete:0,timeout:0,error:0,totalMs:0,maxMs:0}};
   function compact(){
-    const p=window.__journeyPlaybackState||{},s=window.__journeyStreamState||{},e=window.JourneyEngine?.getState?.()||{},d=window.__journeyDiagnostics||{};
+    const p=window.__journeyPlaybackState||{},s=window.__journeyStreamState||{},e=window.JourneyEngine?.getState?.()||{},d=window.__journeyDiagnostics||{},r=window.__journeyRawRuntime||{};
+    const stats={};for(const k of ['raw','analysis']){const x=loadStats[k];stats[k]={start:x.start,complete:x.complete,timeout:x.timeout,error:x.error,avgMs:x.complete?Math.round(x.totalMs/x.complete):0,maxMs:x.maxMs}}
     return{
       index:Number.isFinite(p.index)?p.index:(Number.isFinite(e.index)?e.index:null),
       available:Number.isFinite(p.available)?p.available:(Number.isFinite(e.available)?e.available:null),
       total:Number.isFinite(p.total)?p.total:(Number.isFinite(e.total)?e.total:null),
       streaming:!!(p.streaming??e.streaming),
       clock:{targetMs:p.targetMs??e.targetMs??80,lastDeltaMs:round(p.lastDeltaMs??e.lastDeltaMs),latenessMs:round(p.latenessMs??e.latenessMs),maxLatenessMs:round(p.maxLatenessMs??e.maxLatenessMs),deadlineMisses:p.deadlineMisses??e.deadlineMisses??0},
-      path:{last:p.lastRenderPath??e.lastRenderPath??null,rawFallbacks:p.rawFallbacks??e.rawFallbacks??d.deadlineFallbacks??0,optical:p.opticalPairs??e.opticalPairs??d.opticalPairs??0},
+      path:{last:p.lastRenderPath??e.lastRenderPath??null,rawFallbacks:p.rawFallbacks??e.rawFallbacks??d.deadlineFallbacks??0,optical:p.opticalPairs??e.opticalPairs??d.opticalPairs??0,opticalAllowed:r.opticalAllowed??null},
       ahead:{rawReady:p.rawAheadReady??e.rawAheadReady??null,stabilizedReady:p.stabilizedAheadReady??e.stabilizedAheadReady??null,pairReady:p.pairAheadReady??e.pairAheadReady??null},
-      loader:{queued:p.rawQueue??e.rawQueue??d.rawQueue??null,active:p.rawActive??e.rawActive??d.rawActive??null},
+      loader:{queued:p.rawQueue??e.rawQueue??d.rawQueue??null,active:p.rawActive??e.rawActive??d.rawActive??null,rawTimeoutMs:r.rawTimeoutMs??null},
       cache:{raw:e.readyFrames??d.rawReady??null,frame:e.frameCache??null,pair:e.pairCache??null,tile:e.tileLayerCache??null},
+      loads:stats,
       stream:{active:!!s.active,complete:!!s.complete,failed:!!s.failed,frameCount:Array.isArray(s.frames)?s.frames.length:0},
       worker:{ready:!!d.workerReady,lastPairMs:round(d.lastPairMs)}
     };
@@ -31,6 +34,16 @@
   window.addEventListener('journey-frame-presented',e=>{if(active)log('present',e.detail||{})});
   window.addEventListener('journey-image-wait-start',e=>{if(active)log('wait-start',e.detail||{})});
   window.addEventListener('journey-image-wait-resolved',e=>{if(active)log('wait-resolved',e.detail||{})});
+  window.addEventListener('journey-image-load',e=>{
+    const d=e.detail||{},kind=d.purpose==='analysis'?'analysis':'raw',s=loadStats[kind];
+    if(d.phase==='start')s.start++;
+    else if(d.phase==='complete'){s.complete++;const ms=Number(d.elapsedMs)||0;s.totalMs+=ms;s.maxMs=Math.max(s.maxMs,ms)}
+    else if(d.phase==='timeout')s.timeout++;
+    else if(d.phase==='error')s.error++;
+    if(!active)return;
+    if(d.phase==='start'||d.phase==='complete'||d.phase==='timeout'||d.phase==='error')log(`load-${d.phase}`,{index:d.index??null,purpose:kind,transport:d.transport||null,elapsedMs:d.elapsedMs??null,timeoutMs:d.timeoutMs??null,width:d.width??null,height:d.height??null});
+    if(d.phase==='optical-paused'||d.phase==='optical-resumed')log(d.phase,{rawAhead:d.rawAhead??null,threshold:d.threshold??null});
+  });
   window.addEventListener('journey-playback-ended',e=>{if(active)log('ended',{detail:e.detail||null,state:compact()})});
   document.addEventListener('visibilitychange',()=>{if(active&&document.visibilityState!=='visible')log('visibility',{value:document.visibilityState})});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installButton,{once:true});else installButton();

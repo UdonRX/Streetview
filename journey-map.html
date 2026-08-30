@@ -21,10 +21,10 @@
       <section class="bottom-hud"><div class="location-row"><span id="placeLabel">Selected route</span><span id="frameLabel">0 / 0</span></div><div class="progress-track"><div id="progressBar" class="progress-bar"></div></div><div class="meta-row"><span id="headingLabel">—°</span><span id="networkLabel">0.08秒・jsfeat Worker</span><span id="coordLabel">—</span></div></section>
     </section>
     <section id="startPanel" class="start-panel"><div class="start-card">
-      <p class="eyebrow">MAP JOURNEY</p><h1>選んだ撮影済みルートを再生する。</h1><p class="lead" id="selectedRouteLead">URLと実画像の先行バッファを作ってからJourney Engineへ渡す。</p>
+      <p class="eyebrow">MAP JOURNEY</p><h1>選んだ撮影済みルートを再生する。</h1><p class="lead" id="selectedRouteLead">URL更新と実画像16枚先読みを同時進行し、Journey Engineが立ち上がったらすぐ再生する。</p>
       <div class="preset-card"><span class="preset-title">地図から選択</span><strong id="selectedRouteName">ルートを読み込み中</strong><small id="selectedRouteMeta">—</small></div>
       <details class="custom-route"><summary>緯度・経度</summary><div class="coord-inputs"><label>緯度<input id="latInput" inputmode="decimal" value="0" /></label><label>経度<input id="lngInput" inputmode="decimal" value="0" /></label></div><label class="toggle-row"><input id="useCoordinates" type="checkbox" /><span>座標検索</span></label></details>
-      <button id="startButton" class="start-button" type="button">このルートで旅をはじめる</button><p class="fineprint">URLは約48枚先まで確保し、実画像を先読みしてから0.08秒再生を始める。</p>
+      <button id="startButton" class="start-button" type="button">このルートで旅をはじめる</button><p class="fineprint">raw表示はMapillary直読み、Optical/傾き補正だけ同一オリジンプロキシを使う。</p>
     </div></section>
     <section id="errorPanel" class="error-panel" hidden><div class="error-card"><strong>旅を開始できなかった</strong><p id="errorMessage"></p><button id="retryButton" type="button">地図へ戻る</button></div></section>
   </main>
@@ -32,7 +32,7 @@
   (()=>{
     const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com';
     const INITIAL_URL_BUFFER=48,FETCH_BATCH=16,MAX_RETRY=2,FETCH_TRIGGER_AHEAD=32,SAVE_INTERVAL=3000,STREAM_POLL_MS=120,PROBE_TIMEOUT_MS=9000;
-    const traceStarted=performance.now(),trace=window.__journeyStartupTrace={schema:'streetview-journey-startup-diagnostic-v1',version:'0.1.40-buffer-window',startedAt:new Date().toISOString(),events:[]};
+    const traceStarted=performance.now(),trace=window.__journeyStartupTrace={schema:'streetview-journey-startup-diagnostic-v1',version:'0.1.41-loadsplit',startedAt:new Date().toISOString(),events:[]};
     const event=(name,data={})=>{const row={tMs:Math.round(performance.now()-traceStarted),name,...data};trace.events.push(row);if(trace.events.length>160)trace.events.shift();console.info('[JourneyStartup]',row);return row};
     const safeUrl=u=>{try{const x=new URL(String(u||''),location.href);return{present:!!u,protocol:x.protocol,host:x.host,path:x.pathname.slice(-110),queryKeys:[...x.searchParams.keys()].slice(0,12),length:String(u||'').length}}catch{return{present:!!u,invalid:true,length:String(u||'').length}}};
     const frameSummary=(f,i)=>({index:i,id:String(f?.id||'').slice(0,48),sequenceId:String(f?.sequenceId||'').slice(0,48),sequenceIndex:f?.sequenceIndex??null,provider:f?.provider||null,hasCoords:Number.isFinite(f?.lat)&&Number.isFinite(f?.lng),heading:Number.isFinite(f?.heading)?f.heading:null,url:safeUrl(f?.url),sourceUrl:safeUrl(f?.sourceUrl)});
@@ -90,7 +90,7 @@
         }
       }
       syncState();save(true);
-      event('initial-url-refresh-done',{refreshed,changed,missing,transport:'same-origin-proxy',firstFrames:selected.frames.slice(0,3).map(frameSummary)});
+      event('initial-url-refresh-done',{refreshed,changed,missing,transport:'raw-direct+analysis-proxy',firstFrames:selected.frames.slice(0,3).map(frameSummary)});
     }
 
     async function waitUntilMoreNeeded(){while(selected?.streamPending?.length){const ahead=(selected.frames?.length||0)-playbackIndex()-1;if(ahead<=FETCH_TRIGGER_AHEAD)return;await new Promise(r=>setTimeout(r,STREAM_POLL_MS))}}
@@ -105,14 +105,14 @@
           for(let i=0;i<refs.length;i++){const f=meta[i]?frame(meta[i],refs[i]):null;if(f)frames.push(f);else{const rr={...refs[i],retry:(refs[i].retry||0)+1};if(rr.retry<=MAX_RETRY)retry.push(rr)}}
           if(frames.length)selected.frames.push(...frames);
           if(retry.length)selected.streamPending.push(...retry);
-          event('stream-batch-added',{added:frames.length,retry:retry.length,available:selected.frames.length,pending:selected.streamPending.length,transport:'same-origin-proxy'});
+          event('stream-batch-added',{added:frames.length,retry:retry.length,available:selected.frames.length,pending:selected.streamPending.length,transport:'raw-direct+analysis-proxy'});
           updateMeta();save(false);await new Promise(r=>setTimeout(r,STREAM_POLL_MS));
         }
       }catch(e){window.__journeyStreamState.failed=true;event('stream-failed',{message:String(e?.message||e)})}
       finally{selected.streamOpen=false;syncState();updateMeta();save(true);event('stream-finished',{available:selected?.frames?.length||0,pending:selected?.streamPending?.length||0,failed:!!window.__journeyStreamState.failed})}
     }
 
-    function startupSnapshot(){const s=window.__journeyStreamState||{},p=window.__journeyPlaybackState||{},engine=window.JourneyEngine;return{schema:trace.schema,version:trace.version,exportedAt:new Date().toISOString(),page:{href:location.pathname+location.search,visibility:document.visibilityState,online:navigator.onLine,userAgent:navigator.userAgent,serviceWorker:{supported:'serviceWorker'in navigator,controlled:!!navigator.serviceWorker?.controller,scriptURL:navigator.serviceWorker?.controller?.scriptURL||null}},selected:{provider:selected?.provider||selected?.source||null,frames:selected?.frames?.length||0,pending:selected?.streamPending?.length||0,total:selected?.selection?.totalImageIds||0,sequences:selected?.sequenceIds?.length||0,invalidUrlCount:Array.isArray(selected?.frames)?selected.frames.filter(f=>!f?.url).length:null,firstFrames:(selected?.frames||[]).slice(0,3).map(frameSummary)},engine:{available:!!engine,startFrames:typeof engine?.startFrames==='function',state:typeof engine?.getState==='function'?engine.getState():null},stream:{active:!!s.active,complete:!!s.complete,total:s.total||0,frameCount:Array.isArray(s.frames)?s.frames.length:0,failed:!!s.failed},playback:p,dom:{frameLabel:document.getElementById('frameLabel')?.textContent||null,networkLabel:document.getElementById('networkLabel')?.textContent||null,errorVisible:!document.getElementById('errorPanel')?.hidden,errorMessage:document.getElementById('errorMessage')?.textContent||null,layerASrc:safeUrl(document.getElementById('layerA')?.currentSrc||document.getElementById('layerA')?.src||'')},events:trace.events.slice(-160)}}
+    function startupSnapshot(){const s=window.__journeyStreamState||{},p=window.__journeyPlaybackState||{},engine=window.JourneyEngine;return{schema:trace.schema,version:trace.version,exportedAt:new Date().toISOString(),page:{href:location.pathname+location.search,visibility:document.visibilityState,online:navigator.onLine,userAgent:navigator.userAgent,serviceWorker:{supported:'serviceWorker'in navigator,controlled:!!navigator.serviceWorker?.controller,scriptURL:navigator.serviceWorker?.controller?.scriptURL||null}},selected:{provider:selected?.provider||selected?.source||null,frames:selected?.frames?.length||0,pending:selected?.streamPending?.length||0,total:selected?.selection?.totalImageIds||0,sequences:selected?.sequenceIds?.length||0,invalidUrlCount:Array.isArray(selected?.frames)?selected.frames.filter(f=>!f?.url).length:null,firstFrames:(selected?.frames||[]).slice(0,3).map(frameSummary)},engine:{available:!!engine,startFrames:typeof engine?.startFrames==='function',state:typeof engine?.getState==='function'?engine.getState():null},stream:{active:!!s.active,complete:!!s.complete,total:s.total||0,frameCount:Array.isArray(s.frames)?s.frames.length:0,failed:!!s.failed},playback:p,rawRuntime:window.__journeyRawRuntime||null,dom:{frameLabel:document.getElementById('frameLabel')?.textContent||null,networkLabel:document.getElementById('networkLabel')?.textContent||null,errorVisible:!document.getElementById('errorPanel')?.hidden,errorMessage:document.getElementById('errorMessage')?.textContent||null,layerASrc:safeUrl(document.getElementById('layerA')?.currentSrc||document.getElementById('layerA')?.src||'')},events:trace.events.slice(-160)}}
     window.__copyJourneyStartupLog=async()=>{const text=JSON.stringify(startupSnapshot(),null,2);try{await navigator.clipboard.writeText(text);return true}catch{try{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();return true}catch{return false}}};
     function installCompactLogButton(){let btn=document.getElementById('jdCopy');if(!btn){btn=document.createElement('button');btn.id='jdCopy';btn.type='button';document.body.appendChild(btn)}btn.textContent='起動ログコピー';btn.style.cssText='position:fixed;z-index:30;right:10px;top:calc(env(safe-area-inset-top) + 62px);width:auto;height:30px;padding:0 9px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(5,8,12,.58);color:#fff;font:700 9px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:auto';btn.addEventListener('click',async e=>{e.preventDefault();e.stopImmediatePropagation();const ok=await window.__copyJourneyStartupLog();btn.textContent=ok?'コピー完了':'コピー失敗';setTimeout(()=>btn.textContent='起動ログコピー',1200)},{once:false})}
 
@@ -121,13 +121,13 @@
       if(!window.JourneyEngine?.startFrames){if(!engineWaitLogged){engineWaitLogged=true;event('engine-wait',{appScript:'/app.js?v=0.1.40'})}setTimeout(startDirect,25);return}
       directStarted=true;event('engine-ready-for-direct',{engineState:window.JourneyEngine.getState?.()||null});
       const panel=document.getElementById('startPanel');if(panel)panel.hidden=true;
-      const net=document.getElementById('networkLabel');if(net)net.textContent=`Mapillary URL ${selected.frames.length}枚を更新中…`;
-      try{await refreshInitialUrls()}catch(e){event('initial-url-refresh-failed',{message:String(e?.message||e)})}
-      if(net)net.textContent=`URL ${selected.frames.length}枚準備済み・実画像先読みへ`;
-      selected.frames.slice(0,3).forEach((f,i)=>probeImage(f,i,'proxy-probe'));
+      const net=document.getElementById('networkLabel');if(net)net.textContent='URL更新 + 実画像16枚先読みを同時開始…';
+      const refreshPromise=refreshInitialUrls().catch(e=>event('initial-url-refresh-failed',{message:String(e?.message||e)}));
+      selected.frames.slice(0,3).forEach((f,i)=>probeImage(f,i,'raw-probe'));
       window.addEventListener('journey-playback-started',e=>{event('playback-started-event',{detail:e.detail||null,engineState:window.JourneyEngine?.getState?.()||null});continueStream().catch(err=>{window.__journeyStreamState.failed=true;syncState();event('continue-stream-rejected',{message:String(err?.message||err)})})},{once:true});
-      const started=performance.now();event('startFrames-call',{frames:selected.frames.length,streamTotal:window.__journeyStreamState.total,transport:'same-origin-proxy',first:frameSummary(selected.frames[0],0)});
+      const started=performance.now();event('startFrames-call',{frames:selected.frames.length,streamTotal:window.__journeyStreamState.total,transport:'raw-direct+analysis-proxy',parallelInitialRefresh:true,first:frameSummary(selected.frames[0],0)});
       Promise.resolve(window.JourneyEngine.startFrames(selected.frames,window.__journeyStreamState)).then(()=>event('startFrames-resolved',{elapsedMs:Math.round(performance.now()-started),engineState:window.JourneyEngine?.getState?.()||null})).catch(e=>{directStarted=false;event('startFrames-rejected',{elapsedMs:Math.round(performance.now()-started),name:e?.name||null,message:String(e?.message||e),engineState:window.JourneyEngine?.getState?.()||null})});
+      refreshPromise.then(()=>event('parallel-initial-refresh-settled',{engineState:window.JourneyEngine?.getState?.()||null}));
     }
 
     window.addEventListener('journey-engine-ready',e=>event('journey-engine-ready-event',{detail:e.detail||null}));
@@ -139,7 +139,7 @@
       const badge=document.getElementById('sourceBadge');if(badge)badge.textContent=provider;
       const name=document.getElementById('selectedRouteName');if(name)name.textContent=`${provider} / ${selected?.sequenceIds?.length>1?selected.sequenceIds.length+' sequences':'Sequence '+seq}`;
       const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=selected?.streamPending?.length?`${count}件URL準備済み / 全${total}件予定`:`${count}枚の連続画像`;
-      const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?.streamPending?.length?'URLを約48枚先まで維持し、実画像を先読みしてから再生する。':selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
+      const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?.streamPending?.length?'48枚URL更新と16枚実画像バッファを並列で開始し、0.08秒再生を優先する。':selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
       if(provider==='Mapillary'){const hud=document.querySelector('.top-hud');if(hud&&!document.getElementById('mapillaryAttribution')){const a=document.createElement('a');a.id='mapillaryAttribution';a.href='https://www.mapillary.com/';a.target='_blank';a.rel='noopener';a.textContent='© Mapillary';a.style.cssText='margin-left:8px;color:#fff;font-size:9px;text-decoration:none;opacity:.82';hud.appendChild(a)}}
       if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね'}}else if(new URLSearchParams(location.search).get('autostart')==='1')startDirect();
       const back=document.getElementById('journeyBack');if(back)back.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();location.href='/'},true);
@@ -148,6 +148,6 @@
     });
   })();
   </script>
-  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/app.js?v=0.1.40" defer></script>
+  <script src="/travel-axis.js?v=0.1.30"></script><script src="/diagnostics.js?v=0.1.30" defer></script><script src="/raw-runtime.js?v=0.1.41"></script><script src="/app.js?v=0.1.40" defer></script>
 </body>
 </html>
