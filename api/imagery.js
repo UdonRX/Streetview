@@ -1,8 +1,9 @@
-/* Streetview Journey Phase 4 preview: destination-aware full KartaView sequence segment */
+/* Streetview Journey Phase 4 preview: destination-aware full KartaView sequence segment + Mapillary image proxy */
 const KARTA_API='https://api.openstreetcam.org/2.0';
 const PAGE_SIZE=150;
 const MAX_PAGES=120;
 const DIRECT_TAP_LIMIT=220;
+const MAPILLARY_IMAGE_TIMEOUT_MS=12000;
 
 function num(v){const n=Number(v);return Number.isFinite(n)?n:null;}
 function extract(j){const d=j?.result?.data;if(Array.isArray(d))return d;if(d&&Array.isArray(d.photos))return d.photos;return[];}
@@ -51,7 +52,6 @@ async function directTap(lat,lng,dest){
   hits.sort((a,b)=>a.distance-b.distance);
   const hit=hits[0];
   if(!hit||!Number.isFinite(hit.distance)||hit.distance>DIRECT_TAP_LIMIT)return null;
-
   const frames=await allSequence(hit.sequenceId);
   if(frames.length<2)return null;
   let anchor=frames.findIndex(f=>f.id===hit.p.id);
@@ -66,35 +66,41 @@ async function directTap(lat,lng,dest){
   if(anchor<0)anchor=0;
   const seg=routeSegment(frames,anchor,dest);
   if(seg.frames.length<2)return null;
-
-  return{
-    version:'0.4.0',
-    source:'KartaView',
-    provider:'KartaView',
-    sequenceId:hit.sequenceId,
-    anchorIndex:anchor,
-    destination:dest||null,
-    selection:{
-      strategy:dest?'destination-sequence-segment':'direct-nearest-photo-full',
-      direction:seg.endIndex>=seg.startIndex?'forward':'reverse',
-      proximityMeters:hit.distance,
-      destinationDistanceMeters:seg.destinationDistanceMeters,
-      searchMode:'tap-direct-full',
-      candidateCount:1,
-      visualOverride:false,
-      totalSequenceFrames:frames.length,
-      segmentStartIndex:seg.startIndex,
-      segmentEndIndex:seg.endIndex
-    },
-    frames:seg.frames,
-    candidateRoutes:[]
-  };
+  return{version:'0.4.0',source:'KartaView',provider:'KartaView',sequenceId:hit.sequenceId,anchorIndex:anchor,destination:dest||null,selection:{strategy:dest?'destination-sequence-segment':'direct-nearest-photo-full',direction:seg.endIndex>=seg.startIndex?'forward':'reverse',proximityMeters:hit.distance,destinationDistanceMeters:seg.destinationDistanceMeters,searchMode:'tap-direct-full',candidateCount:1,visualOverride:false,totalSequenceFrames:frames.length,segmentStartIndex:seg.startIndex,segmentEndIndex:seg.endIndex},frames:seg.frames,candidateRoutes:[]};
+}
+function mapillaryImageUrl(raw){
+  if(typeof raw!=='string'||!raw||raw.length>5000)return null;
+  try{const u=new URL(raw);const h=u.hostname.toLowerCase();if(u.protocol!=='https:'||!(h==='fbcdn.net'||h.endsWith('.fbcdn.net')))return null;return u;}catch{return null;}
+}
+async function proxyMapillaryImage(req,res){
+  const target=mapillaryImageUrl(String(req.query.url||''));
+  if(!target)return res.status(400).json({error:'無効なMapillary画像URLです'});
+  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),MAPILLARY_IMAGE_TIMEOUT_MS);
+  try{
+    const upstream=await fetch(target,{signal:controller.signal,redirect:'follow',headers:{Accept:'image/avif,image/webp,image/apng,image/*,*/*;q=0.8','User-Agent':'Mozilla/5.0 StreetviewJourney/1.0'}});
+    const finalUrl=mapillaryImageUrl(upstream.url||target.href);
+    if(!finalUrl||!upstream.ok)return res.status(502).json({error:`Mapillary画像取得失敗 ${upstream.status}`});
+    const type=upstream.headers.get('content-type')||'';
+    if(!type.toLowerCase().startsWith('image/'))return res.status(502).json({error:'Mapillary画像レスポンスが画像ではありません'});
+    const data=Buffer.from(await upstream.arrayBuffer());
+    res.statusCode=200;
+    res.setHeader('Content-Type',type);
+    res.setHeader('Content-Length',String(data.length));
+    res.setHeader('Cache-Control','public, max-age=300, s-maxage=300, stale-while-revalidate=600');
+    res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+    return res.end(data);
+  }catch(e){
+    if(e?.name==='AbortError')return res.status(504).json({error:'Mapillary画像取得がタイムアウトしました'});
+    console.error('mapillary image proxy error',e);
+    return res.status(502).json({error:'Mapillary画像を取得できませんでした'});
+  }finally{clearTimeout(timer);}
 }
 
 module.exports=async function handler(req,res){
-  res.setHeader('Cache-Control','public, s-maxage=60, stale-while-revalidate=300');
-  res.setHeader('Content-Type','application/json; charset=utf-8');
   try{
+    if(req.query.mode==='mapillary-image')return proxyMapillaryImage(req,res);
+    res.setHeader('Cache-Control','public, s-maxage=60, stale-while-revalidate=300');
+    res.setHeader('Content-Type','application/json; charset=utf-8');
     if((req.query.source||'karta')!=='karta')return res.status(400).json({error:'KartaViewルートのみこのAPIで扱います'});
     if(req.query.mode==='nearest'){
       const lat=Number(req.query.lat),lng=Number(req.query.lng);
@@ -105,14 +111,12 @@ module.exports=async function handler(req,res){
       if(!route)return res.status(404).json({error:`タップ地点から${DIRECT_TAP_LIMIT}m以内に直接選択できるKartaView sequenceが見つかりませんでした`});
       return res.status(200).json(route);
     }
-
     const sequenceId=String(req.query.sequence||'').trim();
     if(sequenceId){
       const frames=await allSequence(sequenceId);
       if(frames.length<2)return res.status(404).json({error:'再生可能な画像が不足しています'});
       return res.status(200).json({version:'0.4.0',source:'KartaView',provider:'KartaView',sequenceId,selection:{strategy:'full-sequence',totalSequenceFrames:frames.length},frames,candidateRoutes:[]});
     }
-
     return res.status(400).json({error:'Phase 4 previewでは地図上の撮影ルートを直接タップしてください'});
   }catch(e){
     console.error('imagery route error',e);

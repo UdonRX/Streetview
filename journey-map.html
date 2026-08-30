@@ -32,10 +32,11 @@
   (()=>{
     const KEY='streetview:journey-route',TOKEN_KEY='streetview:mapillary-token',GRAPH='https://graph.mapillary.com';
     const FETCH_BATCH=48,MAX_RETRY=2,FETCH_TRIGGER_AHEAD=64,SAVE_INTERVAL=3000,STREAM_POLL_MS=180,PROBE_TIMEOUT_MS=9000;
-    const traceStarted=performance.now(),trace=window.__journeyStartupTrace={schema:'streetview-journey-startup-diagnostic-v1',version:'0.1.34-url-refresh',startedAt:new Date().toISOString(),events:[]};
+    const traceStarted=performance.now(),trace=window.__journeyStartupTrace={schema:'streetview-journey-startup-diagnostic-v1',version:'0.1.36-mapillary-proxy',startedAt:new Date().toISOString(),events:[]};
     const event=(name,data={})=>{const row={tMs:Math.round(performance.now()-traceStarted),name,...data};trace.events.push(row);if(trace.events.length>160)trace.events.shift();console.info('[JourneyStartup]',row);return row};
     const safeUrl=u=>{try{const x=new URL(String(u||''),location.href);return{present:!!u,protocol:x.protocol,host:x.host,path:x.pathname.slice(-110),queryKeys:[...x.searchParams.keys()].slice(0,12),length:String(u||'').length}}catch{return{present:!!u,invalid:true,length:String(u||'').length}}};
-    const frameSummary=(f,i)=>({index:i,id:String(f?.id||'').slice(0,48),sequenceId:String(f?.sequenceId||'').slice(0,48),sequenceIndex:f?.sequenceIndex??null,provider:f?.provider||null,hasCoords:Number.isFinite(f?.lat)&&Number.isFinite(f?.lng),heading:Number.isFinite(f?.heading)?f.heading:null,url:safeUrl(f?.url)});
+    const frameSummary=(f,i)=>({index:i,id:String(f?.id||'').slice(0,48),sequenceId:String(f?.sequenceId||'').slice(0,48),sequenceIndex:f?.sequenceIndex??null,provider:f?.provider||null,hasCoords:Number.isFinite(f?.lat)&&Number.isFinite(f?.lng),heading:Number.isFinite(f?.heading)?f.heading:null,url:safeUrl(f?.url),sourceUrl:safeUrl(f?.sourceUrl)});
+    const proxyUrl=u=>u?`/api/imagery?mode=mapillary-image&url=${encodeURIComponent(u)}`:'';
     let selected=null,lastSave=0,streamStarted=false,directStarted=false,engineWaitLogged=false;
     try{selected=JSON.parse(sessionStorage.getItem(KEY)||'null');event('session-route-read',{ok:!!selected})}catch(e){event('session-route-parse-error',{message:String(e?.message||e)})}
     const nativeFetch=window.fetch.bind(window);
@@ -62,7 +63,7 @@
       try{const r=await nativeFetch(url,{headers:{Authorization:`OAuth ${t}`},cache:'no-store'}),j=await r.json().catch(()=>({}));event(`${label}-meta-response`,{status:r.status,ok:r.ok,elapsedMs:Math.round(performance.now()-started),dataCount:Array.isArray(j?.data)?j.data.length:0,apiError:j?.error?.message||null});if(!r.ok||j?.error)return out;const by=new Map((j?.data||[]).map(x=>[String(x.id),x]));refs.forEach((ref,i)=>{out[i]=by.get(String(ref.id))||null})}catch(e){event(`${label}-meta-exception`,{elapsedMs:Math.round(performance.now()-started),message:String(e?.message||e)})}
       return out;
     }
-    function frame(m,r){const c=m?.computed_geometry?.coordinates;if(!Array.isArray(c)||c.length<2||!m?.thumb_2048_url)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,url:m.thumb_2048_url,provider:'Mapillary',capturedAt:m.captured_at||null}}
+    function frame(m,r){const c=m?.computed_geometry?.coordinates,source=m?.thumb_2048_url;if(!Array.isArray(c)||c.length<2||!source)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,sourceUrl:source,url:proxyUrl(source),provider:'Mapillary',capturedAt:m.captured_at||null}}
     function syncState(){const s=window.__journeyStreamState;if(!s||!selected)return;s.frames=selected.frames;s.active=streamStarted&&!!selected.streamPending?.length;s.complete=!selected.streamPending?.length;s.total=selected.selection?.totalImageIds||selected.frames.length;window.__journeySelectedRoute=selected}
     function save(force=false){const now=Date.now();if(!force&&now-lastSave<SAVE_INTERVAL)return;lastSave=now;try{sessionStorage.setItem(KEY,JSON.stringify(selected))}catch{}}
     function playbackIndex(){const p=window.__journeyPlaybackState;return Number.isFinite(p?.index)?p.index:0}
@@ -70,7 +71,7 @@
 
     async function refreshInitialUrls(){
       if(!selected||selected.provider!=='Mapillary'||!Array.isArray(selected.frames)||!selected.frames.length)return;
-      const old=selected.frames.map(f=>f?.url||''),refs=selected.frames.map(f=>({id:String(f.id),sequenceId:String(f.sequenceId||''),sequenceIndex:f.sequenceIndex??0}));
+      const old=selected.frames.map(f=>f?.sourceUrl||f?.url||''),refs=selected.frames.map(f=>({id:String(f.id),sequenceId:String(f.sequenceId||''),sequenceIndex:f.sequenceIndex??0}));
       let refreshed=0,changed=0,missing=0;
       event('initial-url-refresh-start',{count:refs.length});
       for(let s=0;s<refs.length;s+=FETCH_BATCH){
@@ -78,12 +79,12 @@
         for(let i=0;i<part.length;i++){
           const idx=s+i,m=metas[i],fresh=m?frame(m,part[i]):null;
           if(!fresh){missing++;continue}
-          if(fresh.url!==old[idx])changed++;
+          if(fresh.sourceUrl!==old[idx])changed++;
           Object.assign(selected.frames[idx],fresh);refreshed++;
         }
       }
       syncState();save(true);
-      event('initial-url-refresh-done',{refreshed,changed,missing,firstFrames:selected.frames.slice(0,3).map(frameSummary)});
+      event('initial-url-refresh-done',{refreshed,changed,missing,transport:'same-origin-proxy',firstFrames:selected.frames.slice(0,3).map(frameSummary)});
     }
 
     async function waitUntilMoreNeeded(){while(selected?.streamPending?.length){const ahead=(selected.frames?.length||0)-playbackIndex()-1;if(ahead<=FETCH_TRIGGER_AHEAD)return;await new Promise(r=>setTimeout(r,STREAM_POLL_MS))}}
@@ -98,7 +99,7 @@
           for(let i=0;i<refs.length;i++){const f=meta[i]?frame(meta[i],refs[i]):null;if(f)frames.push(f);else{const rr={...refs[i],retry:(refs[i].retry||0)+1};if(rr.retry<=MAX_RETRY)retry.push(rr)}}
           if(frames.length)selected.frames.push(...frames);
           if(retry.length)selected.streamPending.push(...retry);
-          event('stream-batch-added',{added:frames.length,retry:retry.length,available:selected.frames.length,pending:selected.streamPending.length});
+          event('stream-batch-added',{added:frames.length,retry:retry.length,available:selected.frames.length,pending:selected.streamPending.length,transport:'same-origin-proxy'});
           updateMeta();save(false);await new Promise(r=>setTimeout(r,STREAM_POLL_MS));
         }
       }catch(e){window.__journeyStreamState.failed=true;event('stream-failed',{message:String(e?.message||e)})}
@@ -117,9 +118,9 @@
       const net=document.getElementById('networkLabel');if(net)net.textContent='Mapillary画像URLを更新中…';
       try{await refreshInitialUrls()}catch(e){event('initial-url-refresh-failed',{message:String(e?.message||e)})}
       if(net)net.textContent=`初期バッファ ${selected.frames.length}枚から再生開始`;
-      selected.frames.slice(0,3).forEach((f,i)=>probeImage(f,i,'refreshed-probe'));
+      selected.frames.slice(0,3).forEach((f,i)=>probeImage(f,i,'proxy-probe'));
       window.addEventListener('journey-playback-started',e=>{event('playback-started-event',{detail:e.detail||null,engineState:window.JourneyEngine?.getState?.()||null});continueStream().catch(err=>{window.__journeyStreamState.failed=true;syncState();event('continue-stream-rejected',{message:String(err?.message||err)})})},{once:true});
-      const started=performance.now();event('startFrames-call',{frames:selected.frames.length,streamTotal:window.__journeyStreamState.total,first:frameSummary(selected.frames[0],0)});
+      const started=performance.now();event('startFrames-call',{frames:selected.frames.length,streamTotal:window.__journeyStreamState.total,transport:'same-origin-proxy',first:frameSummary(selected.frames[0],0)});
       Promise.resolve(window.JourneyEngine.startFrames(selected.frames,window.__journeyStreamState)).then(()=>event('startFrames-resolved',{elapsedMs:Math.round(performance.now()-started),engineState:window.JourneyEngine?.getState?.()||null})).catch(e=>{directStarted=false;event('startFrames-rejected',{elapsedMs:Math.round(performance.now()-started),name:e?.name||null,message:String(e?.message||e),engineState:window.JourneyEngine?.getState?.()||null})});
     }
 
@@ -132,7 +133,7 @@
       const badge=document.getElementById('sourceBadge');if(badge)badge.textContent=provider;
       const name=document.getElementById('selectedRouteName');if(name)name.textContent=`${provider} / ${selected?.sequenceIds?.length>1?selected.sequenceIds.length+' sequences':'Sequence '+seq}`;
       const meta=document.getElementById('selectedRouteMeta');if(meta)meta.textContent=selected?.streamPending?.length?`${count}件URL準備済み / 全${total}件予定`:`${count}枚の連続画像`;
-      const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?.streamPending?.length?'初期バッファのURLを最新化してEngineへ直接渡し、再生開始後に残りを取得する。':selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
+      const lead=document.getElementById('selectedRouteLead');if(lead)lead.textContent=selected?.streamPending?.length?'初期バッファを同一オリジン画像経路へ更新してEngineへ渡し、再生開始後に残りを取得する。':selected?`${provider}の実画像sequenceを直接再生する。`:'地図で候補を選び直してください。';
       if(provider==='Mapillary'){const hud=document.querySelector('.top-hud');if(hud&&!document.getElementById('mapillaryAttribution')){const a=document.createElement('a');a.id='mapillaryAttribution';a.href='https://www.mapillary.com/';a.target='_blank';a.rel='noopener';a.textContent='© Mapillary';a.style.cssText='margin-left:8px;color:#fff;font-size:9px;text-decoration:none;opacity:.82';hud.appendChild(a)}}
       if(!selected||count<2){const b=document.getElementById('startButton');if(b){b.disabled=true;b.textContent='地図からルートを選択してね'}}else if(new URLSearchParams(location.search).get('autostart')==='1')startDirect();
       const back=document.getElementById('journeyBack');if(back)back.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();location.href='/'},true);
