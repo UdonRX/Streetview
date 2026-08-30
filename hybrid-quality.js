@@ -1,10 +1,10 @@
-/* Streetview Journey Feathered Center 1024 Quality v0.1.9 */
+/* Streetview Journey Feathered Center 1024 Quality v0.1.10 */
 (()=>{
   'use strict';
   if(window.__journeyHybridQualityInstalled)return;
   window.__journeyHybridQualityInstalled=true;
 
-  const VERSION='0.1.9';
+  const VERSION='0.1.10';
   const MIN_RAW_AHEAD=5;
   const FULL_RATE_RAW_AHEAD=9;
   const PREFETCH_FROM=1;
@@ -42,15 +42,15 @@
     const oldA=document.getElementById('journeyQualityLayer');if(oldA)oldA.style.display='none';
     const oldB=document.getElementById('journeyHybridQualityLayer');if(oldB)oldB.style.display='none';
 
-    /* Two nested masks create a soft rectangle rather than the conspicuous oval
-       used by the earlier center-quality experiment. The transition consumes a
-       large part of the viewport so there is no single visible 256/1024 seam. */
+    /* Keep a large fully-opaque 1024 center, then blend only resolution at the
+       outside edge. No brightness/filter/opacity adjustment is applied to the
+       quality layer, including one-frame holds, so the feather cannot darken. */
     shell=document.createElement('div');shell.id='journeyHybridQualityShell';
-    shell.style.cssText='position:absolute;inset:0;z-index:3;pointer-events:none;opacity:0;transform:translateZ(0);backface-visibility:hidden;-webkit-mask-image:linear-gradient(to right,transparent 5%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 21%,#000 34%,#000 66%,rgba(0,0,0,.55) 79%,rgba(0,0,0,.18) 88%,transparent 95%);mask-image:linear-gradient(to right,transparent 5%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 21%,#000 34%,#000 66%,rgba(0,0,0,.55) 79%,rgba(0,0,0,.18) 88%,transparent 95%);will-change:opacity';
+    shell.style.cssText='position:absolute;inset:0;z-index:3;pointer-events:none;opacity:0;transform:translateZ(0);backface-visibility:hidden;-webkit-mask-image:linear-gradient(to right,transparent 2%,rgba(0,0,0,.12) 7%,rgba(0,0,0,.38) 13%,rgba(0,0,0,.72) 19%,#000 25%,#000 75%,rgba(0,0,0,.72) 81%,rgba(0,0,0,.38) 87%,rgba(0,0,0,.12) 93%,transparent 98%);mask-image:linear-gradient(to right,transparent 2%,rgba(0,0,0,.12) 7%,rgba(0,0,0,.38) 13%,rgba(0,0,0,.72) 19%,#000 25%,#000 75%,rgba(0,0,0,.72) 81%,rgba(0,0,0,.38) 87%,rgba(0,0,0,.12) 93%,transparent 98%);will-change:opacity';
     vertical=document.createElement('div');
-    vertical.style.cssText='position:absolute;inset:0;-webkit-mask-image:linear-gradient(to bottom,transparent 3%,rgba(0,0,0,.18) 10%,rgba(0,0,0,.55) 19%,#000 31%,#000 73%,rgba(0,0,0,.55) 84%,rgba(0,0,0,.18) 92%,transparent 98%);mask-image:linear-gradient(to bottom,transparent 3%,rgba(0,0,0,.18) 10%,rgba(0,0,0,.55) 19%,#000 31%,#000 73%,rgba(0,0,0,.55) 84%,rgba(0,0,0,.18) 92%,transparent 98%)';
+    vertical.style.cssText='position:absolute;inset:0;-webkit-mask-image:linear-gradient(to bottom,transparent 1%,rgba(0,0,0,.12) 6%,rgba(0,0,0,.38) 12%,rgba(0,0,0,.72) 18%,#000 23%,#000 81%,rgba(0,0,0,.72) 86%,rgba(0,0,0,.38) 91%,rgba(0,0,0,.12) 96%,transparent 99%);mask-image:linear-gradient(to bottom,transparent 1%,rgba(0,0,0,.12) 6%,rgba(0,0,0,.38) 12%,rgba(0,0,0,.72) 18%,#000 23%,#000 81%,rgba(0,0,0,.72) 86%,rgba(0,0,0,.38) 91%,rgba(0,0,0,.12) 96%,transparent 99%)';
     layer=document.createElement('img');layer.id='journeyHybridQualityLayer';layer.alt='';layer.decoding='sync';layer.draggable=false;
-    layer.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;pointer-events:none;filter:none;transform:translateZ(0);backface-visibility:hidden';
+    layer.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;pointer-events:none;opacity:1;filter:none;mix-blend-mode:normal;transform:translateZ(0);backface-visibility:hidden';
     vertical.appendChild(layer);shell.appendChild(vertical);viewer.appendChild(shell);
     return layer;
   }
@@ -80,8 +80,6 @@
   }
 
   function prune(nowIndex){
-    /* Keep only the tiny local quality window. 256 remains the durable continuity
-       cache; 1024 is a short-lived visual enhancement, not a second full route. */
     for(const k of cache.keys())if(k<nowIndex-1||k>nowIndex+15)cache.delete(k);
     for(const k of rejected)if(k<nowIndex-1||k>nowIndex+15)rejected.delete(k);
   }
@@ -103,10 +101,12 @@
   function showImage(image,index,age){
     const src=String(image?.currentSrc||image?.getAttribute?.('src')||'');if(!src)return false;
     const current=String(layer?.currentSrc||layer?.getAttribute?.('src')||'');if(current!==src)setDirectSrc(layer,src);
-    if(shell)shell.style.opacity=age===0?'1':'0.68';
+    /* Never dim a held 1024 frame. The previous 0.68 opacity made the feathered
+       area visibly darker when the underlying 256 frame had a different exposure. */
+    if(shell)shell.style.opacity='1';
     currentKey=index;
     const width=image.naturalWidth||0,height=image.naturalHeight||0,longEdge=Math.max(width,height);
-    emit(age===0?'present-exact':'present-held',{index,keyIndex:index-age,age,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,width,height,longEdge,qualityTier:'1024-center',decoded:true,directBypass:true,fullFrameHighRes:false,centerHighRes:true,baseTier:'256',exactFrameOnly:age===0,renderMode:'feathered-center-1024-over-256'});
+    emit(age===0?'present-exact':'present-held',{index,keyIndex:index-age,age,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,width,height,longEdge,qualityTier:'1024-center',decoded:true,directBypass:true,fullFrameHighRes:false,centerHighRes:true,baseTier:'256',exactFrameOnly:age===0,renderMode:'wide-feathered-center-1024-over-256',brightnessPreserved:true});
     return true;
   }
 
@@ -115,9 +115,6 @@
   function present(index){
     ensureLayer();if(!layer)return;prune(index);schedule();
     const exact=cache.get(index);if(exact&&showImage(exact,index,0)){exactHits++;return}
-    /* One-frame hold prevents a sudden whole-center drop to 256 when a single
-       1024 decode lands a few ms late. The wide feather and reduced opacity hide
-       the tiny temporal mismatch far better than a resolution flash. */
     for(let age=1;age<=MAX_HOLD_AGE;age++){const held=cache.get(index-age);if(held&&showImage(held,index,age)){heldHits++;return}}
     hideQuality(index,'center-quality-not-ready');
   }
@@ -128,12 +125,13 @@
   setInterval(schedule,45);
 
   window.__journeyHybridQuality={version:VERSION,state:()=>({
-    version:VERSION,mode:'feathered-center-1024-over-256',renderMode:'feathered-center-1024-over-256',exactFrameOnly:false,
+    version:VERSION,mode:'wide-feathered-center-1024-over-256',renderMode:'wide-feathered-center-1024-over-256',exactFrameOnly:false,
     rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),remainingAhead:remainingAhead(),stride:lastStride,minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,maxInflight:MAX_QUALITY_INFLIGHT,
     prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,cache:cache.size,inflight:inflight.size,rejected:rejected.size,loads,errors,resolutionMismatches,decodeErrors,exactHits,heldHits,misses,lowAheadSkips,directBypassLoads,currentKey,
     currentLongEdge:currentKey>=0?Math.max(cache.get(currentKey)?.naturalWidth||cache.get(currentKey-1)?.naturalWidth||0,cache.get(currentKey)?.naturalHeight||cache.get(currentKey-1)?.naturalHeight||0):0,
     currentTier:currentKey>=0?'1024-center':null,fullFrameHighRes:false,centerHighRes:currentKey>=0,
-    sourceCropSupported:false,qualityNote:'Mapillary thumb_1024_url is fetched as a JPEG; only the visible center is composited and the quality cache is local/short-lived.'
+    brightnessPreserved:true,centerOpaqueWidthPercent:50,centerOpaqueHeightPercent:58,sourceCropSupported:false,
+    qualityNote:'The center 1024 region is wider and uses mask-only feathering. No opacity, brightness, filter, or blend adjustment is applied to the quality image.'
   })};
-  emit('ready',{mode:'feathered-center-1024-over-256',renderMode:'feathered-center-1024-over-256',minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,maxInflight:MAX_QUALITY_INFLIGHT,maxHoldAge:MAX_HOLD_AGE,directBypass:true,sourceCropSupported:false});
+  emit('ready',{mode:'wide-feathered-center-1024-over-256',renderMode:'wide-feathered-center-1024-over-256',minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,maxInflight:MAX_QUALITY_INFLIGHT,maxHoldAge:MAX_HOLD_AGE,directBypass:true,brightnessPreserved:true,centerOpaqueWidthPercent:50,centerOpaqueHeightPercent:58,sourceCropSupported:false});
 })();
