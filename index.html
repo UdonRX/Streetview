@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/phase3.css?v=0.3.1" />
   <title>Streetview Journey — Phase 4 Journey Graph</title>
   <style>
-    .test-route-panel{position:fixed;z-index:10;top:calc(env(safe-area-inset-top,0px) + 84px);left:12px;right:12px;pointer-events:none}.test-route-card{pointer-events:auto;display:grid;gap:8px;padding:10px 11px;border:1px solid rgba(255,255,255,.13);border-radius:16px;background:rgba(5,13,12,.86);box-shadow:0 10px 34px rgba(0,0,0,.28);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.test-route-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.test-route-head b{font-size:11px}.test-route-head small{font-size:8px;color:rgba(255,255,255,.48)}.test-route-buttons{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.test-route-buttons::-webkit-scrollbar{display:none}.test-route-button{flex:0 0 auto;display:grid;gap:2px;min-width:78px;padding:8px 10px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(255,255,255,.055);color:#fff;text-align:left}.test-route-button strong{font-size:11px}.test-route-button span{font-size:8px;color:rgba(255,255,255,.48)}.test-route-button.is-active{background:#fff;color:#07110f}.test-route-button.is-active span{color:rgba(7,17,15,.58)}.test-route-status{font-size:8px;line-height:1.45;color:rgba(255,255,255,.56)}@media(orientation:landscape){.test-route-panel{right:auto;width:min(430px,48vw)}}
+    .test-route-panel{position:fixed;z-index:10;top:calc(env(safe-area-inset-top,0px) + 84px);left:12px;right:12px;pointer-events:none}.test-route-card{pointer-events:auto;display:grid;gap:8px;padding:10px 11px;border:1px solid rgba(255,255,255,.13);border-radius:16px;background:rgba(5,13,12,.86);box-shadow:0 10px 34px rgba(0,0,0,.28);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.test-route-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.test-route-head b{font-size:11px}.test-route-head small{font-size:8px;color:rgba(255,255,255,.48)}.test-route-buttons{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.test-route-buttons::-webkit-scrollbar{display:none}.test-route-button{flex:0 0 auto;display:grid;gap:2px;min-width:104px;padding:8px 10px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(255,255,255,.055);color:#fff;text-align:left}.test-route-button strong{font-size:11px}.test-route-button span{font-size:8px;color:rgba(255,255,255,.48)}.test-route-button em{font-size:7px;font-style:normal;color:#73ffa1}.test-route-button[data-fixed-state="loading"] em{color:#ffe19a}.test-route-button[data-fixed-state="error"] em{color:#ffb6a7}.test-route-button.is-active{background:#fff;color:#07110f}.test-route-button.is-active span,.test-route-button.is-active em{color:rgba(7,17,15,.58)}.test-route-status{font-size:8px;line-height:1.45;color:rgba(255,255,255,.56)}@media(orientation:landscape){.test-route-panel{right:auto;width:min(430px,48vw)}}
   </style>
 </head>
 <body>
@@ -25,9 +25,9 @@
     </header>
     <section class="test-route-panel" aria-label="京都市内テストルート">
       <div class="test-route-card">
-        <div class="test-route-head"><b>京都テストルート</b><small>出発・到着を固定登録</small></div>
+        <div class="test-route-head"><b>京都テストルート</b><small>Mapillary固定IDを事前解決</small></div>
         <div id="testRouteButtons" class="test-route-buttons"></div>
-        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路の固定テスト区間を選択できる。</div>
+        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路のsequence / 開始・終了imageをバックグラウンドで固定する。</div>
       </div>
     </section>
     <section class="provider-panel" aria-label="撮影データ表示設定">
@@ -37,7 +37,7 @@
         <label class="provider-chip mapillary"><input id="mapillaryToggle" type="checkbox"><span class="dot"></span><span><b>Mapillary</b><small id="mapillaryStatus">トークン未設定</small></span></label>
         <button id="mapillarySettings" class="settings-button" type="button" aria-label="Mapillary設定">•••</button>
       </div>
-      <p class="hint">出発地点と到着地点を撮影済みsequenceへSnapし、providerをまたいで最短経路を探索する。</p>
+      <p class="hint">通常ルートは従来通り地図選択。京都テストルートだけ実sequence/image IDを端末に固定し、coverage探索を省略する。</p>
     </section>
   </main>
   <section id="tokenSheet" class="token-sheet" hidden aria-label="Mapillary access token設定">
@@ -62,31 +62,7 @@
   <script src="/phase3-fast.js?v=0.3.1"></script>
   <script src="/map.js?v=0.3.1"></script>
   <script src="/phase4-route.js?v=0.4.10"></script>
-  <script>
-  (()=>{
-    const DEST_KEY='streetview:phase3-destination';
-    const TEST_KEY='streetview:kyoto-test-route';
-    const TOKEN_KEY='streetview:mapillary-token';
-    const SOURCE='kyoto-test-routes',LINE='kyoto-test-route-lines',POINTS='kyoto-test-route-points',LABELS='kyoto-test-route-labels';
-    const routes=[
-      {id:'road',label:'道路',name:'烏丸通',start:{lat:35.01039,lng:135.75943,name:'烏丸御池'},end:{lat:35.00367,lng:135.75937,name:'四条烏丸'},searchKm:1.4},
-      {id:'sidewalk',label:'歩道',name:'鴨川遊歩道',start:{lat:35.00902,lng:135.77168,name:'三条大橋東岸'},end:{lat:35.00368,lng:135.77155,name:'四条大橋東岸'},searchKm:1.4},
-      {id:'mountain',label:'山道',name:'伏見稲荷山',start:{lat:34.96720,lng:135.77322,name:'千本鳥居付近'},end:{lat:34.97055,lng:135.77920,name:'三ツ辻方面'},searchKm:2.0},
-      {id:'rail',label:'線路',name:'嵯峨野線',start:{lat:34.98758,lng:135.74245,name:'梅小路京都西'},end:{lat:34.99512,lng:135.74210,name:'丹波口'},searchKm:2.0}
-    ];
-    const status=t=>{const el=document.getElementById('testRouteStatus');if(el)el.textContent=t};
-    const buttons=document.getElementById('testRouteButtons');
-    routes.forEach(r=>{const b=document.createElement('button');b.type='button';b.className='test-route-button';b.dataset.route=r.id;b.innerHTML=`<strong>${r.label}</strong><span>${r.start.name} → ${r.end.name}</span>`;b.addEventListener('click',()=>selectRoute(r,b));buttons?.appendChild(b)});
-    function geojson(){const features=[];for(const r of routes){features.push({type:'Feature',properties:{id:r.id,label:r.label,name:r.name,kind:'line'},geometry:{type:'LineString',coordinates:[[r.start.lng,r.start.lat],[r.end.lng,r.end.lat]]}});features.push({type:'Feature',properties:{id:r.id,label:`${r.label} 出発`,kind:'point'},geometry:{type:'Point',coordinates:[r.start.lng,r.start.lat]}});features.push({type:'Feature',properties:{id:r.id,label:`${r.label} 到着`,kind:'point'},geometry:{type:'Point',coordinates:[r.end.lng,r.end.lat]}})}return{type:'FeatureCollection',features}}
-    function install(){const map=window.__streetviewCoverageMap;if(!map)return setTimeout(install,120);if(!map.loaded())return map.once('load',install);if(!map.getSource(SOURCE))map.addSource(SOURCE,{type:'geojson',data:geojson()});if(!map.getLayer(LINE))map.addLayer({id:LINE,type:'line',source:SOURCE,filter:['==',['get','kind'],'line'],paint:{'line-color':['match',['get','id'],'road','#ffb45d','sidewalk','#69e8ff','mountain','#9dff70','rail','#ff77d7','#fff'],'line-width':4,'line-opacity':.88,'line-dasharray':[1.4,1.1]}});if(!map.getLayer(POINTS))map.addLayer({id:POINTS,type:'circle',source:SOURCE,filter:['==',['get','kind'],'point'],paint:{'circle-radius':6,'circle-color':'#fff','circle-stroke-width':2.5,'circle-stroke-color':['match',['get','id'],'road','#ffb45d','sidewalk','#69e8ff','mountain','#9dff70','rail','#ff77d7','#07110f']}});if(!map.getLayer(LABELS))map.addLayer({id:LABELS,type:'symbol',source:SOURCE,filter:['==',['get','kind'],'line'],layout:{'symbol-placement':'line','text-field':['get','label'],'text-size':11,'text-allow-overlap':false},paint:{'text-color':'#fff','text-halo-color':'#07110f','text-halo-width':2}});window.__kyotoJourneyTestRoutes={routes,select:id=>{const r=routes.find(x=>x.id===id);if(r)selectRoute(r,document.querySelector(`[data-route="${id}"]`))}}}
-    function featureCoords(feature){const g=feature?.geometry;if(!g)return[];if(g.type==='Point')return[g.coordinates];if(g.type==='LineString')return g.coordinates||[];if(g.type==='MultiLineString')return(g.coordinates||[]).flat();return[]}
-    function nearestOnFeature(feature,start){let best=null,score=Infinity;for(const c of featureCoords(feature)){if(!Array.isArray(c)||c.length<2)continue;const dx=(c[0]-start.lng)*Math.cos(start.lat*Math.PI/180),dy=c[1]-start.lat,s=dx*dx+dy*dy;if(s<score){score=s;best=c}}return best?{coord:best,score}:null}
-    function nearestCoverage(features,start){let best=null;for(const f of features){const n=nearestOnFeature(f,start);if(!n)continue;const imageBonus=f.layer?.id==='mapillary-image-points'?.72:1;const score=n.score*imageBonus;if(!best||score<best.score)best={feature:f,coord:n.coord,score}}return best}
-    function scanViewport(r,attempt=0){const map=window.__streetviewCoverageMap;if(!map)return;const token=localStorage.getItem(TOKEN_KEY)||'';if(!token){status(`${r.label}：出発 ${r.start.name} / 到着 ${r.end.name} は登録済み。Mapillaryトークンを設定して。`);document.getElementById('mapillarySettings')?.click();return}const layers=['mapillary-image-points','mapillary-sequence-line'].filter(id=>map.getLayer(id));if(!layers.length){if(attempt<7)return setTimeout(()=>scanViewport(r,attempt+1),450);status(`${r.label}：Mapillary coverageレイヤーを読み込めなかった。`);return}const canvas=map.getCanvas(),pad=8;const fs=map.queryRenderedFeatures([[pad,pad],[Math.max(pad+1,canvas.clientWidth-pad),Math.max(pad+1,canvas.clientHeight-pad)]],{layers});const hit=nearestCoverage(fs,r.start);if(hit){const point=map.project(hit.coord);status(`${r.label}：固定出発点に最も近いMapillary coverageを検出。${r.start.name} → ${r.end.name} を抽出中…`);map.fire('click',{lngLat:new maplibregl.LngLat(hit.coord[0],hit.coord[1]),point,originalEvent:null});return}if(attempt<4){const zoom=[14.7,14.0,13.4,12.8][attempt];status(`${r.label}：出発点周辺のcoverageを拡大探索中… (${attempt+1}/4)`);map.easeTo({center:[r.start.lng,r.start.lat],zoom,duration:350});map.once('idle',()=>scanViewport(r,attempt+1));return}status(`${r.label}：この登録区間の周辺にMapillary coverageが表示されていない。Mapillary表示/トークンを確認して。`)}
-    function selectRoute(r,b){document.querySelectorAll('.test-route-button').forEach(x=>x.classList.toggle('is-active',x===b));const preset={id:r.id,label:r.label,name:r.name,start:{...r.start},end:{...r.end},registeredAt:'2026-08-30'};try{sessionStorage.setItem(TEST_KEY,JSON.stringify(preset));sessionStorage.setItem(DEST_KEY,JSON.stringify({lat:r.end.lat,lng:r.end.lng,name:r.end.name,testRouteType:r.id,testRouteLabel:r.label,startLat:r.start.lat,startLng:r.start.lng,startName:r.start.name}))}catch{}const map=window.__streetviewCoverageMap;if(!map)return;status(`${r.label}：出発 ${r.start.name} / 到着 ${r.end.name} を固定登録。Mapillary coverageへSnap中…`);const latPad=r.id==='mountain'?0.012:0.009,lngPad=r.id==='mountain'?0.014:0.011;const bounds=new maplibregl.LngLatBounds([Math.min(r.start.lng,r.end.lng)-lngPad,Math.min(r.start.lat,r.end.lat)-latPad],[Math.max(r.start.lng,r.end.lng)+lngPad,Math.max(r.start.lat,r.end.lat)+latPad]);map.fitBounds(bounds,{padding:{top:190,right:45,bottom:285,left:45},maxZoom:14.7,duration:500});map.once('idle',()=>scanViewport(r,0))}
-    install();
-  })();
-  </script>
+  <script src="/kyoto-test-routes.js?v=0.1.0"></script>
   <script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js?v=0.1.49').catch(()=>{}));</script>
 </body>
 </html>
