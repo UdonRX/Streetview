@@ -1,9 +1,10 @@
-/* Streetview Journey Phase 4 strict 256 continuity / canonical cache shell */
-const SHELL_CACHE='streetview-shell-phase4-strictcontinuity-v11';
+/* Streetview Journey Phase 4 strict continuity + A/C/D optical bridge */
+const SHELL_CACHE='streetview-shell-phase4-acd-v12';
 const IMAGE_CACHE='streetview-images-v0.1.0';
 const SHELL=[
   '/','/index.html','/map.css','/phase3.css?v=0.3.1','/phase3-fast.js?v=0.3.1','/map.js?v=0.3.1',
-  '/phase4-route.js?v=0.4.10','/journey.html','/journey-map.html','/playback-log.js?v=0.1.43',
+  '/phase4-route.js?v=0.4.10','/journey.html','/journey-map.html','/playback-log.js?v=0.1.51',
+  '/hybrid-quality.js?v=0.3.0','/transport-classifier.js?v=0.1.0',
   '/raw-runtime.js?v=0.1.48','/styles.css?v=0.1.6','/travel-axis.js?v=0.1.30','/travel-axis-worker.js?v=0.1.30',
   '/app.js?v=0.1.48','/diagnostics.js?v=0.1.30','/motion-worker.js?v=0.1.25','/manifest.webmanifest'
 ];
@@ -18,20 +19,20 @@ async function sourceResponse(request,fallbackPath=null){try{return await fetch(
 
 function patchJourneyMapSource(text){
   let out=text;
-  out=out.replace("version:'0.1.41-loadsplit'","version:'0.1.48-strict-cache'");
+  out=out.replace("version:'0.1.41-loadsplit'","version:'0.1.51-acd'");
   out=out.replace(
     "const out=new Array(refs.length).fill(null),fields='id,sequence,captured_at,computed_geometry,compass_angle,thumb_2048_url,is_pano';",
     "const out=new Array(refs.length).fill(null),fields='id,sequence,captured_at,computed_geometry,compass_angle,computed_compass_angle,thumb_256_url,thumb_1024_url,thumb_2048_url,is_pano';"
   );
   out=out.replace(
     "function frame(m,r){const c=m?.computed_geometry?.coordinates,source=m?.thumb_2048_url;if(!Array.isArray(c)||c.length<2||!source)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,sourceUrl:source,url:proxyUrl(source),provider:'Mapillary',capturedAt:m.captured_at||null}}",
-    "function frame(m,r){const c=m?.computed_geometry?.coordinates,source=m?.thumb_2048_url||m?.thumb_1024_url||m?.thumb_256_url;if(!Array.isArray(c)||c.length<2||!source)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.computed_compass_angle)?+m.computed_compass_angle:(Number.isFinite(+m.compass_angle)?+m.compass_angle:null),headingSource:Number.isFinite(+m.computed_compass_angle)?'sfm-computed':'exif',exifHeading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,computedHeading:Number.isFinite(+m.computed_compass_angle)?+m.computed_compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,sourceUrl:source,raw256Url:m?.thumb_256_url||null,raw1024Url:m?.thumb_1024_url||null,url:proxyUrl(source),provider:'Mapillary',capturedAt:m.captured_at||null}}"
+    "function frame(m,r){const c=m?.computed_geometry?.coordinates,source=m?.thumb_2048_url||m?.thumb_1024_url||m?.thumb_256_url;if(!Array.isArray(c)||c.length<2||!source)return null;return{id:String(m.id),sequenceId:String(r.sequenceId),sequenceIndex:r.sequenceIndex,lat:+c[1],lng:+c[0],heading:Number.isFinite(+m.computed_compass_angle)?+m.computed_compass_angle:(Number.isFinite(+m.compass_angle)?+m.compass_angle:null),headingSource:Number.isFinite(+m.computed_compass_angle)?'sfm-computed':'exif',exifHeading:Number.isFinite(+m.compass_angle)?+m.compass_angle:null,computedHeading:Number.isFinite(+m.computed_compass_angle)?+m.computed_compass_angle:null,projection:m.is_pano?'SPHERE':'RECTILINEAR',fieldOfView:m.is_pano?360:100,sourceUrl:source,raw2048Url:m?.thumb_2048_url||null,raw256Url:m?.thumb_256_url||null,raw1024Url:m?.thumb_1024_url||null,url:proxyUrl(source),provider:'Mapillary',capturedAt:m.captured_at||null}}"
   );
   out=out.replace("heading:Number.isFinite(f?.heading)?f.heading:null,url:safeUrl(f?.url)","heading:Number.isFinite(f?.heading)?f.heading:null,headingSource:f?.headingSource||null,url:safeUrl(f?.url)");
   out=out.replace('/raw-runtime.js?v=0.1.42','/raw-runtime.js?v=0.1.48').replace('/app.js?v=0.1.42','/app.js?v=0.1.48');
   return out;
 }
-async function journeyMapWithPlaybackLog(request){const response=await sourceResponse(request,'/journey-map.html');let text=patchJourneyMapSource(await response.text());text=text.includes('/playback-log.js?v=0.1.43')?text:text.replace('</body>','<script src="/playback-log.js?v=0.1.43"></script></body>');return textResponse(response,text,'text/html; charset=utf-8');}
+async function journeyMapWithPlaybackLog(request){const response=await sourceResponse(request,'/journey-map.html');let text=patchJourneyMapSource(await response.text());text=text.replace(/<script src="\/playback-log\.js\?v=[^"]+"><\/script>/g,'');text=text.replace('</body>','<script src="/playback-log.js?v=0.1.51"></script></body>');return textResponse(response,text,'text/html; charset=utf-8');}
 
 function patchPhase4RouteSource(text){
   let out=text;
@@ -75,13 +76,13 @@ async function rawRuntimeWithContinuityPatch(request){const response=await sourc
 
 function patchAppSource(text){
   let out=text;
-  out=out.replace('/* Streetview Journey v0.1.42 raw-first analysis hysteresis scheduler */','/* Streetview Journey v0.1.48 strict cache continuity scheduler */').replace("const VERSION='0.1.42';","const VERSION='0.1.48-strict-cache';");
+  out=out.replace('/* Streetview Journey v0.1.42 raw-first analysis hysteresis scheduler */','/* Streetview Journey v0.1.51 strict cache + optical bridge scheduler */').replace("const VERSION='0.1.42';","const VERSION='0.1.51-acd-bridge';");
   out=out.replace('const URL_WINDOW_AHEAD=48,INITIAL_RAW_BUFFER=16,RAW_PRELOAD_AHEAD=18,RAW_CRITICAL_AHEAD=10,RAW_PRELOAD_CONCURRENCY=4,HEAVY_PRELOAD_AHEAD=3,PAIR_PRELOAD_AHEAD=2;','const URL_WINDOW_AHEAD=48,INITIAL_RAW_BUFFER=16,RAW_PRELOAD_AHEAD=18,RAW_CRITICAL_AHEAD=10,RAW_PRELOAD_CONCURRENCY=4,RAW_EMERGENCY_AHEAD=2,RAW_EMERGENCY_SLOTS=2,RAW_BORROW_AT=14,HEAVY_PRELOAD_AHEAD=3,PAIR_PRELOAD_AHEAD=2;');
   out=out.replace('const ANCHOR_WINDOW_RADIUS=2,CAMERA_WINDOW_RADIUS=3,CAMERA_MIN_TRACKS=8;','const ANCHOR_WINDOW_RADIUS=4,CAMERA_WINDOW_RADIUS=3,CAMERA_MIN_TRACKS=8;');
-  out=out.replace("if(card){card.querySelector('.eyebrow').textContent='v0.1.40 ROLLING RAW BUFFER';card.querySelector('h1').textContent='0.08秒を最優先。実画像を先に貯めて途切れを防ぐ。';card.querySelector('.lead').textContent='URLは約48枚先まで、実画像は10〜18枚先を維持。4本のスライディングロードで1枚終わるたび次を補給する。'}","if(card){card.querySelector('.eyebrow').textContent='v0.1.48 STRICT CACHE';card.querySelector('h1').textContent='次フレームの256と実キャッシュを再生の唯一の基準にする。';card.querySelector('.lead').textContent='道路中央補正・80ms再生・1024品質レーンは維持し、エラー復旧とstream件数だけを一本化する。'}");
+  out=out.replace("if(card){card.querySelector('.eyebrow').textContent='v0.1.40 ROLLING RAW BUFFER';card.querySelector('h1').textContent='0.08秒を最優先。実画像を先に貯めて途切れを防ぐ。';card.querySelector('.lead').textContent='URLは約48枚先まで、実画像は10〜18枚先を維持。4本のスライディングロードで1枚終わるたび次を補給する。'}","if(card){card.querySelector('.eyebrow').textContent='v0.1.51 A/C/D';card.querySelector('h1').textContent='80ms再生を止めず、品質・移動分類・中間フレームを足す。';card.querySelector('.lead').textContent='Raw continuityを最優先にし、1024/2048とTile Optical Flowは間に合った時だけ使う。'}");
   out=out.replace(
     "const diag=window.__journeyDiagnostics={version:VERSION,worker:'starting',workerReady:false,lastWorkerPair:null,lastPairMs:0,frameCacheHits:0,tileCacheHits:0,pairCacheHits:0,deadlineFallbacks:0,opticalPairs:0,rawReady:0,targetMs:80,lastDeltaMs:0,latenessMs:0,maxLatenessMs:0,deadlineMisses:0,lastRenderPath:null,rawFallbacks:0,rawAheadReady:0,stabilizedAheadReady:0,pairAheadReady:0,rawQueue:0,rawActive:0,initialRawTarget:INITIAL_RAW_BUFFER,urlWindowAhead:URL_WINDOW_AHEAD};\n  let rawQueue=[],rawQueued=new Map(),rawWaiters=new Map(),rawActive=0,rawQueueGeneration=0,currentPlaybackIndex=0,heavyScheduled=false;",
-    "const diag=window.__journeyDiagnostics={version:VERSION,centerMode:'sfm-heading+road-tangent-v1',worker:'starting',workerReady:false,lastWorkerPair:null,lastPairMs:0,frameCacheHits:0,tileCacheHits:0,pairCacheHits:0,deadlineFallbacks:0,opticalPairs:0,rawReady:0,targetMs:80,lastDeltaMs:0,latenessMs:0,maxLatenessMs:0,deadlineMisses:0,lastRenderPath:null,rawFallbacks:0,rawAheadReady:0,rawAheadTotalReady:0,stabilizedAheadReady:0,pairAheadReady:0,rawQueue:0,rawActive:0,rawEmergencyActive:0,rawBackgroundActive:0,initialRawTarget:INITIAL_RAW_BUFFER,urlWindowAhead:URL_WINDOW_AHEAD};\n  let rawQueue=[],rawQueued=new Map(),rawWaiters=new Map(),rawActive=0,rawEmergencyActive=0,rawBackgroundActive=0,rawQueueGeneration=0,currentPlaybackIndex=0,heavyScheduled=false;"
+    "const diag=window.__journeyDiagnostics={version:VERSION,centerMode:'sfm-heading+road-tangent-v1',worker:'starting',workerReady:false,lastWorkerPair:null,lastPairMs:0,frameCacheHits:0,tileCacheHits:0,pairCacheHits:0,deadlineFallbacks:0,opticalPairs:0,rawReady:0,targetMs:80,lastDeltaMs:0,latenessMs:0,maxLatenessMs:0,deadlineMisses:0,lastRenderPath:null,rawFallbacks:0,rawAheadReady:0,rawAheadTotalReady:0,stabilizedAheadReady:0,pairAheadReady:0,rawQueue:0,rawActive:0,rawEmergencyActive:0,rawBackgroundActive:0,opticalConfidence:0,warpEnabled:false,warpFallbackReason:'not-started',intermediateFramesGenerated:0,warpRenderMs:0,initialRawTarget:INITIAL_RAW_BUFFER,urlWindowAhead:URL_WINDOW_AHEAD};\n  let rawQueue=[],rawQueued=new Map(),rawWaiters=new Map(),rawActive=0,rawEmergencyActive=0,rawBackgroundActive=0,rawQueueGeneration=0,currentPlaybackIndex=0,heavyScheduled=false;"
   );
   out=out.replace(
     "const stabilizedFrameCache=new Map(),stabilizedFrameReadyCache=new Map(),tileLayerCache=new Map(),preparedPairCache=new Map(),preparedPairReadyCache=new Map(),rollCommittedCache=new Map();",
@@ -138,6 +139,18 @@ function patchAppSource(text){
   out=out.replace("window.JourneyEngine={startFrames,reset,getState:()=>({...window.__journeyPlaybackState,routeLength:route.length,version:VERSION,","window.JourneyEngine={startFrames,reset,getState:()=>({...window.__journeyPlaybackState,...routeMetrics(),actualRenderableAhead:contiguousRawAhead(currentPlaybackIndex),version:VERSION,");
   out=out.replace("rawQueue:diag.rawQueue,rawActive:diag.rawActive,initialRawTarget:INITIAL_RAW_BUFFER,urlWindowAhead:URL_WINDOW_AHEAD})};","rawQueue:diag.rawQueue,rawActive:diag.rawActive,rawEmergencyActive:diag.rawEmergencyActive,rawBackgroundActive:diag.rawBackgroundActive,rawAheadTotalReady:diag.rawAheadTotalReady,initialRawTarget:INITIAL_RAW_BUFFER,urlWindowAhead:URL_WINDOW_AHEAD}),hasRenderableFrame:i=>hasRenderableFrame(Number(i)),contiguousRenderableAhead:(i=currentPlaybackIndex,limit=RAW_PRELOAD_AHEAD)=>contiguousRawAhead(Number.isFinite(Number(i))?Number(i):currentPlaybackIndex,Number(limit)||RAW_PRELOAD_AHEAD)};");
   out=out.replace("try{window.dispatchEvent(new CustomEvent('journey-engine-ready'","window.addEventListener('journey-image-load',e=>{const d=e.detail||{};if(d.purpose==='raw'&&d.phase==='complete')recoverPlaybackUI(Number(d.index),renderableFrame(Number(d.index)))});\n  try{window.dispatchEvent(new CustomEvent('journey-engine-ready'");
+  out=out.replace("  try{window.dispatchEvent(new CustomEvent('journey-engine-ready'",`  window.__journeyOpticalBridge={
+    version:'0.1.0',
+    getPreparedPair:i=>preparedPairReadyCache.get(Number(i))||null,
+    getRouteFrame:i=>route[Number(i)]||null,
+    getTravelBearing:i=>travelBearing(Number(i)),
+    getSpeedMs:()=>speedMs,
+    setPlaybackMs:ms=>{const v=Number(ms),allowed=[80,100,120,150];if(!allowed.includes(v))return speedMs;speedMs=v;diag.targetMs=v;if(window.__journeyPlaybackState)window.__journeyPlaybackState.targetMs=v;return v},
+    getCurrentIndex:()=>currentPlaybackIndex,
+    getTileConfig:()=>({cols:TILE_COLS,rows:TILE_ROWS,analysisW:ANALYSIS_W,analysisH:ANALYSIS_H,overlapPx:TILE_OVERLAP_CSS_PX,maxNeighborDx:MAX_NEIGHBOR_DX,maxNeighborDy:MAX_NEIGHBOR_DY}),
+    getWorkerPair:i=>diag.lastWorkerPair?.frame===Number(i)?diag.lastWorkerPair:null
+  };
+  try{window.dispatchEvent(new CustomEvent('journey-engine-ready'`);
   return out;
 }
 async function appWithSchedulerPatch(request){const response=await sourceResponse(request,'/app.js?v=0.1.48');const patched=patchAppSource(await response.text());return textResponse(response,patched,'application/javascript; charset=utf-8');}
