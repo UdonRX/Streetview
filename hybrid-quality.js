@@ -1,10 +1,12 @@
-/* Streetview Journey Feathered Center Quality v0.1.11 */
+/* Streetview Journey Feathered Center Quality v0.1.12 */
 (()=>{
   'use strict';
   if(window.__journeyHybridQualityInstalled)return;
   window.__journeyHybridQualityInstalled=true;
 
-  const VERSION='0.1.11';
+  const VERSION='0.1.12';
+  const GRAPH='https://graph.mapillary.com';
+  const TOKEN_KEY='streetview:mapillary-token';
   const MIN_RAW_AHEAD=5;
   const FULL_RATE_RAW_AHEAD=9;
   const PREFETCH_FROM=1;
@@ -17,8 +19,8 @@
   const VERTICAL_RADIUS=6;
   const VERTICAL_MAX_SHIFT=.12;
   const VERTICAL_GAIN=.86;
-  const cache=new Map(),inflight=new Map(),rejected=new Set(),verticalSamples=new Map(),urlFrameCache=new Map();
-  let shell=null,vertical=null,layer=null,currentKey=-1,loads=0,errors=0,resolutionMismatches=0,decodeErrors=0,exactHits=0,heldHits=0,misses=0,lastStride=null,lowAheadSkips=0,directBypassLoads=0,sourceFallbackHits=0,verticalApplied=0;
+  const cache=new Map(),inflight=new Map(),rejected=new Set(),verticalSamples=new Map(),urlFrameCache=new Map(),meta1024=new Map(),meta1024Inflight=new Map();
+  let shell=null,vertical=null,layer=null,currentKey=-1,loads=0,errors=0,resolutionMismatches=0,decodeErrors=0,exactHits=0,heldHits=0,misses=0,lastStride=null,lowAheadSkips=0,directBypassLoads=0,sourceFallbackHits=0,verticalApplied=0,metadataLoads=0,metadataErrors=0;
 
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const emit=(phase,detail={})=>{try{window.dispatchEvent(new CustomEvent('journey-hybrid-quality',{detail:{phase,version:VERSION,...detail}}))}catch{}};
@@ -31,25 +33,36 @@
   const remainingAhead=()=>Math.max(0,frames().length-currentIndex()-1);
   const requiredRawAhead=()=>Math.min(MIN_RAW_AHEAD,remainingAhead());
   const norm=value=>{try{const u=new URL(String(value||''),location.href);u.searchParams.delete('analysis');u.searchParams.delete('axisv');return u.href}catch{return String(value||'')}};
+  const token=()=>{try{return localStorage.getItem(TOKEN_KEY)||''}catch{return''}};
 
-  function qualitySources(i){
-    const f=frames()[i];if(!f)return[];
-    const values=[
-      [f.raw2048Url||f.thumb_2048_url,'2048'],
-      [f.sourceUrl,'source'],
-      [f.raw1024Url||f.thumb_1024_url,'1024'],
-      [f.url,'url']
-    ],seen=new Set(),out=[];
-    for(const [url,tier] of values){if(!url)continue;const k=String(url);if(seen.has(k))continue;seen.add(k);out.push({url:k,tier})}
-    return out;
+  function local1024(i){const f=frames()[i];if(!f)return'';return String(f.raw1024Url||f.thumb_1024_url||'')}
+  function hasQualitySource(i){const f=frames()[i];return !!(local1024(i)||(f?.provider==='Mapillary'&&f?.id&&token()))}
+  async function resolve1024(i){
+    const f=frames()[i];if(!f)return null;
+    const local=local1024(i);if(local)return{url:local,tier:'1024'};
+    const id=String(f.id||'');if(!id||f.provider!=='Mapillary')return null;
+    if(meta1024.has(id)){const u=meta1024.get(id);return u?{url:u,tier:'1024'}:null}
+    if(meta1024Inflight.has(id)){const u=await meta1024Inflight.get(id);return u?{url:u,tier:'1024'}:null}
+    const t=token();if(!t)return null;
+    const p=(async()=>{
+      try{
+        const r=await fetch(`${GRAPH}/${encodeURIComponent(id)}?fields=thumb_1024_url`,{headers:{Authorization:`OAuth ${t}`},cache:'force-cache'});
+        const j=await r.json().catch(()=>({}));
+        const u=r.ok&&!j?.error?String(j?.thumb_1024_url||''):'';
+        meta1024.set(id,u);metadataLoads++;
+        if(u){f.raw1024Url=u;f.thumb_1024_url=u}
+        return u;
+      }catch{metadataErrors++;meta1024.set(id,'');return''}
+      finally{meta1024Inflight.delete(id)}
+    })();
+    meta1024Inflight.set(id,p);const u=await p;return u?{url:u,tier:'1024'}:null;
   }
-  function qualitySource(i){return qualitySources(i)[0]||null}
   function strideFor(ahead){if(ahead>=FULL_RATE_RAW_AHEAD)return 1;if(ahead>=MIN_RAW_AHEAD)return 1;return Infinity}
   function setDirectSrc(im,url){directBypassLoads++;im.setAttribute('src',String(url||''))}
 
   function rebuildUrlFrameCache(){
     urlFrameCache.clear();const list=frames();
-    for(let i=0;i<list.length;i++)for(const u of [list[i]?.url,list[i]?.sourceUrl,list[i]?.raw256Url,list[i]?.raw1024Url,list[i]?.raw2048Url,list[i]?.thumb_256_url,list[i]?.thumb_1024_url,list[i]?.thumb_2048_url])if(u)urlFrameCache.set(norm(u),i);
+    for(let i=0;i<list.length;i++)for(const u of [list[i]?.url,list[i]?.sourceUrl,list[i]?.raw256Url,list[i]?.raw1024Url,list[i]?.thumb_256_url,list[i]?.thumb_1024_url])if(u)urlFrameCache.set(norm(u),i);
   }
   function frameForImage(image){
     if(!(image instanceof HTMLImageElement))return null;
@@ -111,18 +124,16 @@
     if(rejected.has(index))return Promise.resolve(null);
     if(cache.has(index)||inflight.has(index))return inflight.get(index)||Promise.resolve(cache.get(index));
     const aheadAtStart=rawAhead(),required=requiredRawAhead();if(aheadAtStart<required){lowAheadSkips++;return Promise.resolve(null)}
-    const sources=qualitySources(index);if(!sources.length)return Promise.resolve(null);
     const promise=(async()=>{
-      const started=performance.now();let lastSize={width:0,height:0,longEdge:0};
-      emit('load-start',{index,requestedTier:sources.map(s=>s.tier).join('>'),rawAhead:aheadAtStart,requiredRawAhead:required,directBypass:true,prefetchDistance:index-currentIndex()});
-      for(let n=0;n<sources.length;n++){
-        const source=sources[n],im=document.createElement('img');im.decoding='async';im.referrerPolicy='no-referrer';
-        const ok=await loadCandidate(im,source);if(!ok)continue;
-        const decoded=await decodeImage(im),width=im.naturalWidth||0,height=im.naturalHeight||0,longEdge=Math.max(width,height);lastSize={width,height,longEdge};
-        if(decoded&&longEdge>=EXPECTED_LONG_EDGE){if(n>0)sourceFallbackHits++;cache.set(index,im);loads++;emit('load-complete',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,qualityTier:`${source.tier}-center-source`,decoded:true,directBypass:true,sourceAttempt:n+1,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart,requiredRawAhead:required});return im}
-        if(!decoded&&longEdge>=EXPECTED_LONG_EDGE){decodeErrors++;continue}
-      }
-      resolutionMismatches++;rejected.add(index);emit('resolution-mismatch',{index,...lastSize,directBypass:true,attemptedSources:sources.map(s=>s.tier)});return null;
+      const started=performance.now(),source=await resolve1024(index);let lastSize={width:0,height:0,longEdge:0};
+      if(!source)return null;
+      emit('load-start',{index,requestedTier:'1024-only-center',rawAhead:aheadAtStart,requiredRawAhead:required,directBypass:true,prefetchDistance:index-currentIndex()});
+      const im=document.createElement('img');im.decoding='async';im.referrerPolicy='no-referrer';
+      const ok=await loadCandidate(im,source);if(!ok)return null;
+      const decoded=await decodeImage(im),width=im.naturalWidth||0,height=im.naturalHeight||0,longEdge=Math.max(width,height);lastSize={width,height,longEdge};
+      if(decoded&&longEdge>=EXPECTED_LONG_EDGE){cache.set(index,im);loads++;emit('load-complete',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,qualityTier:'1024-center-source',decoded:true,directBypass:true,sourceAttempt:1,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart,requiredRawAhead:required});return im}
+      if(!decoded&&longEdge>=EXPECTED_LONG_EDGE)decodeErrors++;
+      resolutionMismatches++;rejected.add(index);emit('resolution-mismatch',{index,...lastSize,directBypass:true,attemptedSources:['1024']});return null;
     })().catch(()=>{errors++;rejected.add(index);emit('load-error',{index,directBypass:true});return null}).finally(()=>inflight.delete(index));
     inflight.set(index,promise);return promise;
   }
@@ -131,7 +142,7 @@
   function schedule(){
     const base=currentIndex(),ahead=rawAhead(),required=requiredRawAhead(),remaining=remainingAhead();let stride=strideFor(ahead);if(remaining<MIN_RAW_AHEAD&&ahead>=required)stride=1;lastStride=Number.isFinite(stride)?stride:null;
     if(ahead<required){lowAheadSkips++;return}if(!Number.isFinite(stride)||inflight.size>=MAX_QUALITY_INFLIGHT)return;
-    let started=0;for(const offset of PREFETCH_ORDER){if(offset<PREFETCH_FROM||offset>PREFETCH_TO)continue;const i=base+offset;if(i>=frames().length)continue;if(!qualitySource(i)||cache.has(i)||inflight.has(i)||rejected.has(i))continue;loadQuality(i);started++;if(started>=MAX_QUALITY_INFLIGHT||inflight.size>=MAX_QUALITY_INFLIGHT)break}
+    let started=0;for(const offset of PREFETCH_ORDER){if(offset<PREFETCH_FROM||offset>PREFETCH_TO)continue;const i=base+offset;if(i>=frames().length)continue;if(!hasQualitySource(i)||cache.has(i)||inflight.has(i)||rejected.has(i))continue;loadQuality(i);started++;if(started>=MAX_QUALITY_INFLIGHT||inflight.size>=MAX_QUALITY_INFLIGHT)break}
   }
   function alignQualityLayer(index){
     if(!layer)return;const v=verticalCorrection(index),x=window.__journeyTravelAxis?.anchorForFrame?.(index,50),shiftY=v.shift*100;
@@ -141,7 +152,7 @@
   function showImage(image,index,age){
     const src=String(image?.currentSrc||image?.getAttribute?.('src')||'');if(!src)return false;const current=String(layer?.currentSrc||layer?.getAttribute?.('src')||'');if(current!==src)setDirectSrc(layer,src);alignQualityLayer(index);if(shell)shell.style.opacity='1';currentKey=index;
     const width=image.naturalWidth||0,height=image.naturalHeight||0,longEdge=Math.max(width,height),v=verticalCorrection(index);
-    emit(age===0?'present-exact':'present-held',{index,keyIndex:index-age,age,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,width,height,longEdge,qualityTier:'1024-center',decoded:true,directBypass:true,fullFrameHighRes:false,centerHighRes:true,baseTier:'256',exactFrameOnly:age===0,renderMode:'feathered-center-hires-over-256',brightnessPreserved:true,verticalShift:v.shift,verticalConfidence:v.confidence});return true;
+    emit(age===0?'present-exact':'present-held',{index,keyIndex:index-age,age,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,width,height,longEdge,qualityTier:'1024-center',decoded:true,directBypass:true,fullFrameHighRes:false,centerHighRes:true,baseTier:'256',exactFrameOnly:age===0,renderMode:'feathered-center-1024-over-256',brightnessPreserved:true,verticalShift:v.shift,verticalConfidence:v.confidence});return true;
   }
   function hideQuality(index,reason){if(shell)shell.style.opacity='0';currentKey=-1;misses++;emit('present-base-continuity',{index,reason,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,centerHighRes:false,baseTier:'256'})}
   function present(index){ensureLayer();if(!layer)return;prune(index);schedule();const exact=cache.get(index);if(exact&&showImage(exact,index,0)){exactHits++;return}for(let age=1;age<=MAX_HOLD_AGE;age++){const held=cache.get(index-age);if(held&&showImage(held,index,age)){heldHits++;return}}hideQuality(index,'center-quality-not-ready')}
@@ -152,13 +163,14 @@
   setInterval(schedule,45);
 
   window.__journeyHybridQuality={version:VERSION,state:()=>({
-    version:VERSION,mode:'feathered-center-hires-over-256',renderMode:'feathered-center-hires-over-256',exactFrameOnly:false,
+    version:VERSION,mode:'feathered-center-1024-over-256',renderMode:'feathered-center-1024-over-256',exactFrameOnly:false,
     rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),remainingAhead:remainingAhead(),stride:lastStride,minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,maxInflight:MAX_QUALITY_INFLIGHT,
     prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,prefetchOrder:PREFETCH_ORDER,cache:cache.size,inflight:inflight.size,rejected:rejected.size,loads,errors,resolutionMismatches,decodeErrors,exactHits,heldHits,misses,lowAheadSkips,directBypassLoads,sourceFallbackHits,currentKey,
     currentLongEdge:currentKey>=0?Math.max(cache.get(currentKey)?.naturalWidth||cache.get(currentKey-1)?.naturalWidth||0,cache.get(currentKey)?.naturalHeight||cache.get(currentKey-1)?.naturalHeight||0):0,
-    currentTier:currentKey>=0?'hires-center':null,fullFrameHighRes:false,centerHighRes:currentKey>=0,brightnessPreserved:true,centerOpaqueWidthPercent:50,centerOpaqueHeightPercent:58,sourceCropSupported:false,
+    currentTier:currentKey>=0?'1024-center':null,fullFrameHighRes:false,centerHighRes:currentKey>=0,brightnessPreserved:true,centerOpaqueWidthPercent:50,centerOpaqueHeightPercent:58,sourceCropSupported:false,
     verticalCenter:{samples:verticalSamples.size,applied:verticalApplied,maxShiftPercent:VERTICAL_MAX_SHIFT*100,current:window.__journeyVerticalCenter||null},
-    qualityNote:'Prefer 2048/source/1024 candidates, prefetch 3-5 frames ahead for 80ms playback, and keep the high-res overlay aligned with horizontal and vertical travel-axis corrections.'
+    metadata1024:{cache:meta1024.size,inflight:meta1024Inflight.size,loads:metadataLoads,errors:metadataErrors},
+    qualityNote:'Use only Mapillary 1024 for the feathered center overlay. Never fetch 2048/source/url for quality. Start quality work only when contiguous rawAhead is sufficient.'
   })};
-  emit('ready',{mode:'feathered-center-hires-over-256',renderMode:'feathered-center-hires-over-256',minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,prefetchOrder:PREFETCH_ORDER,maxInflight:MAX_QUALITY_INFLIGHT,maxHoldAge:MAX_HOLD_AGE,directBypass:true,brightnessPreserved:true,verticalCentering:true,sourceFallback:true});
+  emit('ready',{mode:'feathered-center-1024-over-256',renderMode:'feathered-center-1024-over-256',minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,prefetchOrder:PREFETCH_ORDER,maxInflight:MAX_QUALITY_INFLIGHT,maxHoldAge:MAX_HOLD_AGE,directBypass:true,brightnessPreserved:true,verticalCentering:true,sourceFallback:false,qualityTier:'1024-only'});
 })();
