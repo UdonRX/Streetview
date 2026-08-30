@@ -1,12 +1,12 @@
-/* Streetview Journey pedestrian vanishing-point calibration v0.2.0 */
+/* Streetview Journey pedestrian vanishing-point calibration v0.3.0 */
 (()=>{
   'use strict';
   if(window.__pedestrianAxisFixInstalled)return;
   window.__pedestrianAxisFixInstalled=true;
-  const VERSION='0.2.0';
+  const VERSION='0.3.0';
   const STEP_MAX=2.2,MIN_STEPS=3,ANALYSIS_W=160,ANALYSIS_H=120;
   const MIN_CONF=.18,MAX_SAMPLE_PAIRS=5,PAIR_TIMEOUT_MS=700,TOTAL_TIMEOUT_MS=1100;
-  const ABS_MIN_ANCHOR=18,ABS_MAX_ANCHOR=82,META_DELTA_MAX=15,SMOOTH_ALPHA=.42;
+  const ABS_MIN_ANCHOR=18,ABS_MAX_ANCHOR=82,VISUAL_RESIDUAL_MAX_PCT=10,SMOOTH_ALPHA=.42;
   const STREAM_POLL_MS=180,LOOKAHEAD_FRAMES=70,MIN_RANGE_FRAMES=6;
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const rad=v=>v*Math.PI/180,deg=v=>v*180/Math.PI;
@@ -30,7 +30,37 @@
   function sequenceRanges(frames){const out=[];let start=0;for(let i=1;i<=frames.length;i++){if(i===frames.length||String(frames[i]?.sequenceId||'')!==String(frames[start]?.sequenceId||'')){out.push({start,end:i-1,sequenceId:String(frames[start]?.sequenceId||'')});start=i}}return out}
   function metadataAnchor(frames,i,start,end){const f=frames[i],tr=travelBearing(frames,i,start,end),ih=Number.isFinite(+f?.heading)?+f.heading:null;if(!Number.isFinite(tr)||!Number.isFinite(ih))return 50;const fov=clamp(Number(f?.fieldOfView)||100,45,170);return clamp(50+angle(ih,tr)/fov*100,8,92)}
   function rangeMetadataAnchor(frames,range){const vals=[];const step=Math.max(1,Math.floor((range.end-range.start)/8));for(let i=range.start;i<=range.end;i+=step)vals.push(metadataAnchor(frames,i,range.start,range.end));return median(vals)||50}
-  async function calibrateRange(frames,range){const prof=pedestrian(frames,range.start,range.end),len=range.end-range.start+1;if(!prof.yes||len<MIN_RANGE_FRAMES)return{...range,pedestrian:false,medianStep:prof.medianStep};const key=`${range.sequenceId}:${range.start}`,prev=rangeState.get(key),pairs=samplePairs(range.start,range.end),results=await Promise.all(pairs.map(i=>analyzePair(frames,i))),center=weightedCenter(results),metaAnchor=rangeMetadataAnchor(frames,range);if(!center)return{...range,pedestrian:true,medianStep:prof.medianStep,applied:false,pairs,usable:0,metaAnchor,reason:'insufficient-static-flow'};const visualRaw=clamp(center.center*100,ABS_MIN_ANCHOR,ABS_MAX_ANCHOR),bounded=clamp(visualRaw,metaAnchor-META_DELTA_MAX,metaAnchor+META_DELTA_MAX),confidenceGain=clamp((center.confidence-.12)/.45,.22,.78),target=metaAnchor+(bounded-metaAnchor)*confidenceGain,anchor=prev?.anchor!=null?prev.anchor*(1-SMOOTH_ALPHA)+target*SMOOTH_ALPHA:target,fovs=[];for(let i=range.start;i<=range.end;i++){const f=frames[i];if(Number.isFinite(+f?.fieldOfView)&&+f.fieldOfView>40&&+f.fieldOfView<180)fovs.push(+f.fieldOfView)}const fov=median(fovs)||100,biasDeg=(anchor-50)*fov/100;for(let i=range.start;i<=range.end;i++){const f=frames[i],tr=travelBearing(frames,i,range.start,range.end);if(!Number.isFinite(tr)||String(f?.projection||'').toUpperCase()==='SPHERE')continue;f.heading=(tr-biasDeg+360)%360;f.__pedestrianAxisAnchor=anchor;f.__pedestrianAxisVersion=VERSION}const info={...range,pedestrian:true,medianStep:prof.medianStep,applied:true,pairs,usable:center.usable,anchor,visualRaw,metaAnchor,flowCenter:center.center,biasDeg,confidence:center.confidence,spread:center.spread};rangeState.set(key,info);return info}
+  function originalHeading(f){const h=Number(f?.__pedestrianAxisOriginalHeading);if(Number.isFinite(h))return h;const cur=Number(f?.heading);if(Number.isFinite(cur)){f.__pedestrianAxisOriginalHeading=cur;return cur}return null}
+  async function calibrateRange(frames,range){
+    const prof=pedestrian(frames,range.start,range.end),len=range.end-range.start+1;
+    if(!prof.yes||len<MIN_RANGE_FRAMES)return{...range,pedestrian:false,medianStep:prof.medianStep};
+    const key=`${range.sequenceId}:${range.start}`,prev=rangeState.get(key),pairs=samplePairs(range.start,range.end),results=await Promise.all(pairs.map(i=>analyzePair(frames,i))),center=weightedCenter(results),metaAnchor=rangeMetadataAnchor(frames,range);
+    const visualRaw=center?clamp(center.center*100,ABS_MIN_ANCHOR,ABS_MAX_ANCHOR):metaAnchor;
+    /* The source-image anchor tells us where the travel axis sits inside the original camera view.
+       Do NOT use that anchor as the new view heading. Instead center the GPS travel bearing itself,
+       then use only the disagreement between visual and metadata anchors as a small correction.
+       This makes the rule generic for any pedestrian sequence regardless of left/right camera bias. */
+    const confidenceGain=center?clamp((center.confidence-.12)/.45,.18,.72):0;
+    const visualResidualPct=center?clamp(visualRaw-metaAnchor,-VISUAL_RESIDUAL_MAX_PCT,VISUAL_RESIDUAL_MAX_PCT)*confidenceGain:0;
+    const targetResidual=visualResidualPct;
+    const smoothedResidual=prev?.visualResidualPct!=null?prev.visualResidualPct*(1-SMOOTH_ALPHA)+targetResidual*SMOOTH_ALPHA:targetResidual;
+    const correctedHeadings=[];
+    for(let i=range.start;i<=range.end;i++){
+      const f=frames[i],tr=travelBearing(frames,i,range.start,range.end);if(!Number.isFinite(tr)||String(f?.projection||'').toUpperCase()==='SPHERE')continue;
+      const fov=clamp(Number(f?.fieldOfView)||100,45,170),ih=originalHeading(f),residualDeg=smoothedResidual*fov/100;
+      const desired=(tr+residualDeg+360)%360;
+      f.heading=desired;
+      f.__pedestrianAxisAnchor=50;
+      f.__pedestrianAxisSourceAnchor=visualRaw;
+      f.__pedestrianAxisMetadataAnchor=metaAnchor;
+      f.__pedestrianAxisResidualPct=smoothedResidual;
+      f.__pedestrianAxisOriginalHeading=Number.isFinite(ih)?ih:f.__pedestrianAxisOriginalHeading;
+      f.__pedestrianAxisVersion=VERSION;
+      correctedHeadings.push(desired);
+    }
+    const info={...range,pedestrian:true,medianStep:prof.medianStep,applied:true,pairs,usable:center?.usable||0,anchor:50,visualRaw,metaAnchor,flowCenter:center?.center??null,visualResidualPct:smoothedResidual,confidence:center?.confidence||0,spread:center?.spread||0,headingMode:'travel-bearing-centered+visual-residual'};
+    rangeState.set(key,info);return info;
+  }
   async function calibrateRelevant(frames,forceAll=false){if(!Array.isArray(frames)||frames.length<2)return[];const idx=Number(window.__journeyPlaybackState?.index)||0,ranges=sequenceRanges(frames),relevant=ranges.filter(r=>forceAll?r.start<Math.min(frames.length,LOOKAHEAD_FRAMES):r.end>=Math.max(0,idx-8)&&r.start<=idx+LOOKAHEAD_FRAMES);const jobs=relevant.map(r=>calibrateRange(frames,r));if(!jobs.length)return[];return await Promise.race([Promise.all(jobs),new Promise(resolve=>setTimeout(()=>resolve([{timeout:true}]),TOTAL_TIMEOUT_MS))])}
   function publish(result){window.__pedestrianAxisFix={version:VERSION,result,at:new Date().toISOString()};try{if(window.__journeyDiagnostics&&typeof window.__journeyDiagnostics==='object')window.__journeyDiagnostics.pedestrianAxisFix=window.__pedestrianAxisFix}catch{}}
   let streamBusy=false,lastLength=0,lastSeq='';
