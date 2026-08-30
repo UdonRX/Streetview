@@ -2,7 +2,7 @@
 (()=>{
   if(window.__journeyPlaybackLoggerInstalled)return;
   window.__journeyPlaybackLoggerInstalled=true;
-  const VERSION='0.1.38-clock-log',MAX_EVENTS=260,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
+  const VERSION='0.1.39-priority-log',MAX_EVENTS=220,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
   const trace={schema:'streetview-journey-playback-diagnostic-v2',version:VERSION,startedAt:null,events:[]};
   let active=false,t0=0,lastIndex=null,lastAdvance=0,lastStall=0,lastRaf=performance.now();
   const round=v=>Number.isFinite(v)?Math.round(v*10)/10:null;
@@ -16,6 +16,7 @@
       clock:{targetMs:p.targetMs??e.targetMs??80,lastDeltaMs:round(p.lastDeltaMs??e.lastDeltaMs),latenessMs:round(p.latenessMs??e.latenessMs),maxLatenessMs:round(p.maxLatenessMs??e.maxLatenessMs),deadlineMisses:p.deadlineMisses??e.deadlineMisses??0},
       path:{last:p.lastRenderPath??e.lastRenderPath??null,rawFallbacks:p.rawFallbacks??e.rawFallbacks??d.deadlineFallbacks??0,optical:p.opticalPairs??e.opticalPairs??d.opticalPairs??0},
       ahead:{rawReady:p.rawAheadReady??e.rawAheadReady??null,stabilizedReady:p.stabilizedAheadReady??e.stabilizedAheadReady??null,pairReady:p.pairAheadReady??e.pairAheadReady??null},
+      loader:{queued:p.rawQueue??e.rawQueue??d.rawQueue??null,active:p.rawActive??e.rawActive??d.rawActive??null},
       cache:{raw:e.readyFrames??d.rawReady??null,frame:e.frameCache??null,pair:e.pairCache??null,tile:e.tileLayerCache??null},
       stream:{active:!!s.active,complete:!!s.complete,failed:!!s.failed,frameCount:Array.isArray(s.frames)?s.frames.length:0},
       worker:{ready:!!d.workerReady,lastPairMs:round(d.lastPairMs)}
@@ -28,10 +29,11 @@
   window.__copyJourneyPlaybackLog=copy;
   window.addEventListener('journey-playback-started',e=>start(e.detail||{}));
   window.addEventListener('journey-frame-presented',e=>{if(active)log('present',e.detail||{})});
-  window.addEventListener('journey-deadline-fallback',e=>{if(active)log('fallback',e.detail||{})});
+  window.addEventListener('journey-image-wait-start',e=>{if(active)log('wait-start',e.detail||{})});
+  window.addEventListener('journey-image-wait-resolved',e=>{if(active)log('wait-resolved',e.detail||{})});
   window.addEventListener('journey-playback-ended',e=>{if(active)log('ended',{detail:e.detail||null,state:compact()})});
   document.addEventListener('visibilitychange',()=>{if(active&&document.visibilityState!=='visible')log('visibility',{value:document.visibilityState})});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installButton,{once:true});else installButton();
-  setInterval(()=>{if(!active)return;const now=performance.now(),s=compact(),idx=s.index;if(idx!==lastIndex){const delta=lastIndex===null?0:now-lastAdvance;lastIndex=idx;lastAdvance=now;log('advance',{index:idx,deltaMs:round(delta),latenessMs:s.clock.latenessMs,path:s.path.last,ahead:s.ahead})}const canAdvance=Number.isFinite(idx)&&Number.isFinite(s.available)&&s.available>idx+1;if(canAdvance&&now-lastAdvance>=STALL_MS&&now-lastStall>=1000){lastStall=now;log('stall',{index:idx,stalledMs:Math.round(now-lastAdvance),clock:s.clock,ahead:s.ahead,path:s.path.last})}},POLL_MS);
+  setInterval(()=>{if(!active)return;const now=performance.now(),s=compact(),idx=s.index;if(idx!==lastIndex){const delta=lastIndex===null?0:now-lastAdvance;lastIndex=idx;lastAdvance=now;log('advance',{index:idx,deltaMs:round(delta),latenessMs:s.clock.latenessMs,path:s.path.last,ahead:s.ahead,loader:s.loader})}const canAdvance=Number.isFinite(idx)&&Number.isFinite(s.available)&&s.available>idx+1;if(canAdvance&&now-lastAdvance>=STALL_MS&&now-lastStall>=1000){lastStall=now;log('stall',{index:idx,stalledMs:Math.round(now-lastAdvance),clock:s.clock,ahead:s.ahead,loader:s.loader,path:s.path.last})}},POLL_MS);
   function rafWatch(now){const gap=now-lastRaf;lastRaf=now;if(active&&gap>RAF_GAP_MS)log('main-thread-gap',{gapMs:Math.round(gap),index:compact().index});requestAnimationFrame(rafWatch)}requestAnimationFrame(rafWatch);
 })();
