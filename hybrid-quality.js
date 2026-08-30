@@ -1,17 +1,19 @@
-/* Streetview Journey Hybrid High-Resolution Journey v0.1.1 */
+/* Streetview Journey Hybrid High-Resolution Journey v0.1.2 */
 (()=>{
   'use strict';
   if(window.__journeyHybridQualityInstalled)return;
   window.__journeyHybridQualityInstalled=true;
 
-  const VERSION='0.1.1';
-  const MIN_RAW_AHEAD=3;
+  const VERSION='0.1.2';
+  // 1024 is a quality lane only. Never start a new high-res request while the
+  // 256 continuity lane has less than ~0.6s of contiguous frames available.
+  const MIN_RAW_AHEAD=8;
   const PREFETCH_FROM=5;
   const PREFETCH_TO=20;
   const HOLD_FRAMES=2;
   const EXPECTED_LONG_EDGE=900;
   const cache=new Map(),inflight=new Map(),frameMeta=new Map();
-  let layer=null,currentKey=-1,loads=0,errors=0,resolutionMismatches=0,exactHits=0,heldHits=0,lastStride=null;
+  let layer=null,currentKey=-1,loads=0,errors=0,resolutionMismatches=0,exactHits=0,heldHits=0,lastStride=null,lowAheadSkips=0;
 
   const emit=(phase,detail={})=>{try{window.dispatchEvent(new CustomEvent('journey-hybrid-quality',{detail:{phase,version:VERSION,...detail}}))}catch{}};
   const runtime=()=>window.__journeyRawRuntime||{};
@@ -23,7 +25,7 @@
   const qualityUrl=i=>{const f=frames()[i];return f?.raw1024Url||f?.thumb_1024_url||null};
   const sameSequence=(a,b)=>{const aa=String(frames()[a]?.sequenceId||''),bb=String(frames()[b]?.sequenceId||'');return !aa||!bb||aa===bb};
 
-  function strideFor(ahead){if(ahead>=8)return 2;if(ahead>=5)return 3;if(ahead>=MIN_RAW_AHEAD)return 4;return Infinity}
+  function strideFor(ahead){if(ahead>=14)return 2;if(ahead>=10)return 3;if(ahead>=MIN_RAW_AHEAD)return 4;return Infinity}
   function ensureLayer(){
     if(layer?.isConnected)return layer;
     const viewer=document.getElementById('viewer');if(!viewer)return null;
@@ -35,13 +37,14 @@
   }
   function load1024(index){
     if(cache.has(index)||inflight.has(index))return inflight.get(index)||Promise.resolve(cache.get(index));
+    const aheadAtStart=rawAhead();
+    if(aheadAtStart<MIN_RAW_AHEAD){lowAheadSkips++;return Promise.resolve(null)}
     const url=qualityUrl(index);if(!url)return Promise.resolve(null);
     const promise=new Promise(resolve=>{
       const im=new Image();im.decoding='async';im.referrerPolicy='no-referrer';const started=performance.now();let done=false;
-      const finish=(ok)=>{if(done)return;done=true;inflight.delete(index);const width=im.naturalWidth||0,height=im.naturalHeight||0,longEdge=Math.max(width,height);if(ok&&longEdge>=EXPECTED_LONG_EDGE){cache.set(index,im);loads++;emit('load-complete',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,rawAhead:rawAhead()});resolve(im)}else if(ok){resolutionMismatches++;emit('resolution-mismatch',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,rawAhead:rawAhead()});resolve(null)}else{errors++;emit('load-error',{index,elapsedMs:Math.round(performance.now()-started),rawAhead:rawAhead()});resolve(null)}};
-      im.onload=()=>finish(true);im.onerror=()=>finish(false);emit('load-start',{index,rawAhead:rawAhead()});
-      // Important: setAttribute bypasses raw-runtime's patched HTMLImageElement.src setter,
-      // so a requested thumb_1024_url cannot be silently downgraded to 256-continuity.
+      const finish=(ok)=>{if(done)return;done=true;inflight.delete(index);const width=im.naturalWidth||0,height=im.naturalHeight||0,longEdge=Math.max(width,height);if(ok&&longEdge>=EXPECTED_LONG_EDGE){cache.set(index,im);loads++;emit('load-complete',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart});resolve(im)}else if(ok){resolutionMismatches++;emit('resolution-mismatch',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart});resolve(null)}else{errors++;emit('load-error',{index,elapsedMs:Math.round(performance.now()-started),rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart});resolve(null)}};
+      im.onload=()=>finish(true);im.onerror=()=>finish(false);emit('load-start',{index,rawAhead:aheadAtStart});
+      // Bypass raw-runtime's patched src setter so 1024 cannot be downgraded to 256.
       im.setAttribute('src',url);
     });
     inflight.set(index,promise);return promise;
@@ -49,6 +52,7 @@
   function prune(nowIndex){for(const k of cache.keys())if(k<nowIndex-8||k>nowIndex+30)cache.delete(k);for(const k of frameMeta.keys())if(k<nowIndex-8)frameMeta.delete(k)}
   function schedule(){
     const base=currentIndex(),ahead=rawAhead(),stride=strideFor(ahead);lastStride=Number.isFinite(stride)?stride:null;
+    if(ahead<MIN_RAW_AHEAD){lowAheadSkips++;return}
     if(!Number.isFinite(stride)||inflight.size>=1)return;
     for(let offset=PREFETCH_FROM;offset<=PREFETCH_TO;offset++){
       const i=base+offset;if(i>=frames().length)break;
@@ -84,6 +88,6 @@
   window.addEventListener('journey-frame-presented',e=>{const d=e.detail||{},i=Number(d.index);if(Number.isFinite(i))present(i,d)});
   window.addEventListener('journey-playback-started',()=>{ensureLayer();setTimeout(schedule,60)});
   setInterval(schedule,100);
-  window.__journeyHybridQuality={version:VERSION,state:()=>({version:VERSION,rawAhead:rawAhead(),stride:lastStride,cache:cache.size,inflight:inflight.size,loads,errors,resolutionMismatches,exactHits,heldHits,currentKey})};
+  window.__journeyHybridQuality={version:VERSION,state:()=>({version:VERSION,rawAhead:rawAhead(),stride:lastStride,minRawAhead:MIN_RAW_AHEAD,cache:cache.size,inflight:inflight.size,loads,errors,resolutionMismatches,exactHits,heldHits,lowAheadSkips,currentKey})};
   emit('ready',{minRawAhead:MIN_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,holdFrames:HOLD_FRAMES,expectedLongEdge:EXPECTED_LONG_EDGE});
 })();
