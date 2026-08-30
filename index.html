@@ -11,23 +11,23 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/map.css" />
   <link rel="stylesheet" href="/phase3.css?v=0.3.1" />
-  <title>Streetview Journey — Phase 3 Destination</title>
+  <title>Streetview Journey — Phase 4 Journey Graph</title>
 </head>
 <body>
   <main class="coverage-app">
-    <div id="coverageMap" class="coverage-map" aria-label="MapillaryとKartaViewの撮影済みルート地図"></div>
+    <div id="coverageMap" class="coverage-map" aria-label="MapillaryとKartaViewを統合したJourney Graph地図"></div>
     <header class="map-header">
-      <div><span class="phase">PHASE 3</span><strong>STREETVIEW</strong><small>撮影済みルートから旅を探す</small></div>
+      <div><span class="phase">PHASE 4</span><strong>STREETVIEW</strong><small>Mapillary × KartaView Journey Graph</small></div>
       <a class="journey-link" href="/journey.html">Journey Engine</a>
     </header>
     <section class="provider-panel" aria-label="撮影データ表示設定">
-      <div class="provider-head"><div><b>Coverage</b><small>光っている道に実画像あり</small></div><span id="mapStatus">地図を準備中</span></div>
+      <div class="provider-head"><div><b>Journey Graph</b><small>到着地を決めて、地図上で出発地点をタップ</small></div><span id="mapStatus">地図を準備中</span></div>
       <div class="provider-row">
         <label class="provider-chip karta"><input id="kartaToggle" type="checkbox" checked><span class="dot"></span><span><b>KartaView</b><small id="kartaStatus">接続中</small></span></label>
         <label class="provider-chip mapillary"><input id="mapillaryToggle" type="checkbox"><span class="dot"></span><span><b>Mapillary</b><small id="mapillaryStatus">トークン未設定</small></span></label>
         <button id="mapillarySettings" class="settings-button" type="button" aria-label="Mapillary設定">•••</button>
       </div>
-      <p class="hint">地図を動かして撮影済み道路を探せる。右上の現在地ボタンで近くへ移動。</p>
+      <p class="hint">出発地点と到着地点を撮影済みsequenceへSnapし、providerをまたいで最短経路を探索する。</p>
     </section>
   </main>
   <section id="tokenSheet" class="token-sheet" hidden aria-label="Mapillary access token設定">
@@ -35,9 +35,23 @@
     <div class="sheet-card"><div class="sheet-handle"></div><span class="phase">MAPILLARY</span><h1>撮影済みルートを重ねる</h1><p>Mapillary Vector Tilesの表示にはAccess Tokenが必要。入力値はこの端末のlocalStorageだけに保存し、GitHubには書き込まない。</p><label>Access Token<input id="mapillaryToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="MLY|..." /></label><div class="sheet-actions"><button id="saveToken" class="primary" type="button">保存して表示</button><button id="removeToken" type="button">削除</button></div><button id="closeTokenSheet" class="close-sheet" type="button">閉じる</button></div>
   </section>
   <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+  <script type="module">
+    Promise.all([
+      import('https://esm.sh/@turf/turf@7.2.0'),
+      import('https://esm.sh/rbush@4.0.1'),
+      import('https://esm.sh/ngraph.graph@20.1.2'),
+      import('https://esm.sh/ngraph.path@1.6.1')
+    ]).then(([turf, rbush, graph, ngraphPath]) => {
+      window.__journeyGraphLibs = { turf, RBush: rbush.default, createGraph: graph.default, ngraphPath };
+      window.dispatchEvent(new CustomEvent('journey-graph-libs-ready'));
+    }).catch(error => {
+      console.error('[JourneyGraph] library load failed', error);
+      window.__journeyGraphLibsError = String(error?.message || error);
+    });
+  </script>
   <script src="/phase3-fast.js?v=0.3.1"></script>
   <script src="/map.js?v=0.3.1"></script>
-  <script src="/phase4-route.js?v=0.4.6"></script>
+  <script src="/phase4-route.js?v=0.4.8"></script>
   <script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));</script>
 </body>
 </html>
