@@ -1,18 +1,19 @@
-/* Streetview Journey Full-Frame Direct Predecoded 1024 Quality v0.1.8 */
+/* Streetview Journey Feathered Center 1024 Quality v0.1.9 */
 (()=>{
   'use strict';
   if(window.__journeyHybridQualityInstalled)return;
   window.__journeyHybridQualityInstalled=true;
 
-  const VERSION='0.1.8';
-  const MIN_RAW_AHEAD=6;
-  const FULL_RATE_RAW_AHEAD=12;
-  const PREFETCH_FROM=3;
-  const PREFETCH_TO=24;
+  const VERSION='0.1.9';
+  const MIN_RAW_AHEAD=5;
+  const FULL_RATE_RAW_AHEAD=9;
+  const PREFETCH_FROM=1;
+  const PREFETCH_TO=14;
   const EXPECTED_LONG_EDGE=900;
   const MAX_QUALITY_INFLIGHT=2;
+  const MAX_HOLD_AGE=1;
   const cache=new Map(),inflight=new Map(),rejected=new Set();
-  let layer=null,currentKey=-1,loads=0,errors=0,resolutionMismatches=0,decodeErrors=0,exactHits=0,misses=0,lastStride=null,lowAheadSkips=0,directBypassLoads=0;
+  let shell=null,vertical=null,layer=null,currentKey=-1,loads=0,errors=0,resolutionMismatches=0,decodeErrors=0,exactHits=0,heldHits=0,misses=0,lastStride=null,lowAheadSkips=0,directBypassLoads=0;
 
   const emit=(phase,detail={})=>{try{window.dispatchEvent(new CustomEvent('journey-hybrid-quality',{detail:{phase,version:VERSION,...detail}}))}catch{}};
   const runtime=()=>window.__journeyRawRuntime||{};
@@ -27,29 +28,30 @@
 
   function strideFor(ahead){
     if(ahead>=FULL_RATE_RAW_AHEAD)return 1;
-    if(ahead>=9)return 1;
-    if(ahead>=MIN_RAW_AHEAD)return 2;
+    if(ahead>=MIN_RAW_AHEAD)return 1;
     return Infinity;
   }
 
-  /* raw-runtime intentionally overrides HTMLImageElement.src so normal playback
-     requests can be redirected to the strict 256 continuity lane. Quality images
-     must NOT go through that override: doing so converts our 1024 request back to
-     a 255px image. setAttribute uses the browser's native attribute path instead
-     of the replaced JS property setter, so this lane stays a genuine 1024 load. */
-  function setDirectSrc(im,url){
-    directBypassLoads++;
-    im.setAttribute('src',String(url||''));
-  }
+  /* raw-runtime overrides the JS src property for playback. 1024 quality must
+     bypass that override or it is silently converted back to the 256 lane. */
+  function setDirectSrc(im,url){directBypassLoads++;im.setAttribute('src',String(url||''))}
 
   function ensureLayer(){
     if(layer?.isConnected)return layer;
     const viewer=document.getElementById('viewer');if(!viewer)return null;
-    const old=document.getElementById('journeyQualityLayer');if(old)old.style.display='none';
-    layer=document.createElement('img');
-    layer.id='journeyHybridQualityLayer';layer.alt='';layer.decoding='sync';layer.draggable=false;
-    layer.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;opacity:0;z-index:3;pointer-events:none;transform:translateZ(0);backface-visibility:hidden;transition:none;filter:none;will-change:opacity';
-    viewer.appendChild(layer);
+    const oldA=document.getElementById('journeyQualityLayer');if(oldA)oldA.style.display='none';
+    const oldB=document.getElementById('journeyHybridQualityLayer');if(oldB)oldB.style.display='none';
+
+    /* Two nested masks create a soft rectangle rather than the conspicuous oval
+       used by the earlier center-quality experiment. The transition consumes a
+       large part of the viewport so there is no single visible 256/1024 seam. */
+    shell=document.createElement('div');shell.id='journeyHybridQualityShell';
+    shell.style.cssText='position:absolute;inset:0;z-index:3;pointer-events:none;opacity:0;transform:translateZ(0);backface-visibility:hidden;-webkit-mask-image:linear-gradient(to right,transparent 5%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 21%,#000 34%,#000 66%,rgba(0,0,0,.55) 79%,rgba(0,0,0,.18) 88%,transparent 95%);mask-image:linear-gradient(to right,transparent 5%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 21%,#000 34%,#000 66%,rgba(0,0,0,.55) 79%,rgba(0,0,0,.18) 88%,transparent 95%);will-change:opacity';
+    vertical=document.createElement('div');
+    vertical.style.cssText='position:absolute;inset:0;-webkit-mask-image:linear-gradient(to bottom,transparent 3%,rgba(0,0,0,.18) 10%,rgba(0,0,0,.55) 19%,#000 31%,#000 73%,rgba(0,0,0,.55) 84%,rgba(0,0,0,.18) 92%,transparent 98%);mask-image:linear-gradient(to bottom,transparent 3%,rgba(0,0,0,.18) 10%,rgba(0,0,0,.55) 19%,#000 31%,#000 73%,rgba(0,0,0,.55) 84%,rgba(0,0,0,.18) 92%,transparent 98%)';
+    layer=document.createElement('img');layer.id='journeyHybridQualityLayer';layer.alt='';layer.decoding='sync';layer.draggable=false;
+    layer.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;pointer-events:none;filter:none;transform:translateZ(0);backface-visibility:hidden';
+    vertical.appendChild(layer);shell.appendChild(vertical);viewer.appendChild(shell);
     return layer;
   }
 
@@ -64,80 +66,74 @@
       const finish=(ok,decoded=true)=>{
         if(done)return;done=true;inflight.delete(index);
         const width=im.naturalWidth||0,height=im.naturalHeight||0,longEdge=Math.max(width,height);
-        if(ok&&longEdge>=EXPECTED_LONG_EDGE&&decoded){
-          cache.set(index,im);loads++;
-          emit('load-complete',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,qualityTier:'1024',decoded:true,directBypass:true,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart,requiredRawAhead:required});resolve(im);
-        }else if(ok&&longEdge>=EXPECTED_LONG_EDGE){
-          decodeErrors++;rejected.add(index);emit('decode-error',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,directBypass:true,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart});resolve(null);
-        }else if(ok){
-          resolutionMismatches++;rejected.add(index);emit('resolution-mismatch',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,directBypass:true,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart});resolve(null);
-        }else{
-          errors++;rejected.add(index);emit('load-error',{index,elapsedMs:Math.round(performance.now()-started),directBypass:true,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart});resolve(null);
-        }
+        if(ok&&longEdge>=EXPECTED_LONG_EDGE&&decoded){cache.set(index,im);loads++;emit('load-complete',{index,elapsedMs:Math.round(performance.now()-started),width,height,longEdge,qualityTier:'1024-center-source',decoded:true,directBypass:true,rawAhead:rawAhead(),rawAheadAtStart:aheadAtStart,requiredRawAhead:required});resolve(im)}
+        else if(ok&&longEdge>=EXPECTED_LONG_EDGE){decodeErrors++;rejected.add(index);emit('decode-error',{index,width,height,longEdge,directBypass:true});resolve(null)}
+        else if(ok){resolutionMismatches++;rejected.add(index);emit('resolution-mismatch',{index,width,height,longEdge,directBypass:true});resolve(null)}
+        else{errors++;rejected.add(index);emit('load-error',{index,directBypass:true});resolve(null)}
       };
-      im.onload=()=>{
-        if(typeof im.decode==='function')im.decode().then(()=>finish(true,true)).catch(()=>finish(true,false));
-        else finish(true,true);
-      };
+      im.onload=()=>{if(typeof im.decode==='function')im.decode().then(()=>finish(true,true)).catch(()=>finish(true,false));else finish(true,true)};
       im.onerror=()=>finish(false,false);
-      emit('load-start',{index,requestedTier:'1024-direct-predecode-full-frame',rawAhead:aheadAtStart,requiredRawAhead:required,directBypass:true});
+      emit('load-start',{index,requestedTier:'1024-direct-center-source',rawAhead:aheadAtStart,requiredRawAhead:required,directBypass:true,prefetchDistance:index-currentIndex()});
       setDirectSrc(im,source.url);
     });
     inflight.set(index,promise);return promise;
   }
 
   function prune(nowIndex){
-    for(const k of cache.keys())if(k<nowIndex-2||k>nowIndex+32)cache.delete(k);
-    for(const k of rejected)if(k<nowIndex-2||k>nowIndex+32)rejected.delete(k);
+    /* Keep only the tiny local quality window. 256 remains the durable continuity
+       cache; 1024 is a short-lived visual enhancement, not a second full route. */
+    for(const k of cache.keys())if(k<nowIndex-1||k>nowIndex+15)cache.delete(k);
+    for(const k of rejected)if(k<nowIndex-1||k>nowIndex+15)rejected.delete(k);
   }
 
   function schedule(){
     const base=currentIndex(),ahead=rawAhead(),required=requiredRawAhead(),remaining=remainingAhead();
-    let stride=strideFor(ahead);
-    if(remaining<MIN_RAW_AHEAD&&ahead>=required)stride=1;
+    let stride=strideFor(ahead);if(remaining<MIN_RAW_AHEAD&&ahead>=required)stride=1;
     lastStride=Number.isFinite(stride)?stride:null;
     if(ahead<required){lowAheadSkips++;return}
     if(!Number.isFinite(stride)||inflight.size>=MAX_QUALITY_INFLIGHT)return;
     let started=0;
     for(let offset=PREFETCH_FROM;offset<=PREFETCH_TO&&inflight.size<MAX_QUALITY_INFLIGHT;offset++){
       const i=base+offset;if(i>=frames().length)break;
-      if(i%stride!==0||!qualitySource(i)||cache.has(i)||inflight.has(i)||rejected.has(i))continue;
-      loadQuality(i);started++;
-      if(started>=MAX_QUALITY_INFLIGHT)break;
+      if(!qualitySource(i)||cache.has(i)||inflight.has(i)||rejected.has(i))continue;
+      loadQuality(i);started++;if(started>=MAX_QUALITY_INFLIGHT)break;
     }
   }
 
-  function hideQuality(index,reason){
-    if(layer)layer.style.opacity='0';currentKey=-1;misses++;
-    emit('present-base-continuity',{index,reason,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,fullFrameHighRes:false,baseTier:'256'});
+  function showImage(image,index,age){
+    const src=String(image?.currentSrc||image?.getAttribute?.('src')||'');if(!src)return false;
+    const current=String(layer?.currentSrc||layer?.getAttribute?.('src')||'');if(current!==src)setDirectSrc(layer,src);
+    if(shell)shell.style.opacity=age===0?'1':'0.68';
+    currentKey=index;
+    const width=image.naturalWidth||0,height=image.naturalHeight||0,longEdge=Math.max(width,height);
+    emit(age===0?'present-exact':'present-held',{index,keyIndex:index-age,age,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,width,height,longEdge,qualityTier:'1024-center',decoded:true,directBypass:true,fullFrameHighRes:false,centerHighRes:true,baseTier:'256',exactFrameOnly:age===0,renderMode:'feathered-center-1024-over-256'});
+    return true;
   }
 
+  function hideQuality(index,reason){if(shell)shell.style.opacity='0';currentKey=-1;misses++;emit('present-base-continuity',{index,reason,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,centerHighRes:false,baseTier:'256'})}
+
   function present(index){
-    ensureLayer();if(!layer)return;
-    prune(index);schedule();
-    const image=cache.get(index);
-    if(!image){hideQuality(index,'exact-direct-predecoded-quality-not-ready');return}
-    const src=String(image.currentSrc||image.getAttribute('src')||'');
-    if(!src){hideQuality(index,'quality-src-missing');return}
-    const current=String(layer.currentSrc||layer.getAttribute('src')||'');
-    if(current!==src)setDirectSrc(layer,src);
-    layer.style.opacity='1';currentKey=index;exactHits++;
-    const width=image.naturalWidth||0,height=image.naturalHeight||0,longEdge=Math.max(width,height);
-    emit('present-exact',{index,keyIndex:index,age:0,rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),stride:lastStride,width,height,longEdge,qualityTier:'1024',decoded:true,directBypass:true,fullFrameHighRes:true,centerHighRes:false,zIndex:3,exactFrameOnly:true,renderMode:'direct-predecoded-full-frame'});
+    ensureLayer();if(!layer)return;prune(index);schedule();
+    const exact=cache.get(index);if(exact&&showImage(exact,index,0)){exactHits++;return}
+    /* One-frame hold prevents a sudden whole-center drop to 256 when a single
+       1024 decode lands a few ms late. The wide feather and reduced opacity hide
+       the tiny temporal mismatch far better than a resolution flash. */
+    for(let age=1;age<=MAX_HOLD_AGE;age++){const held=cache.get(index-age);if(held&&showImage(held,index,age)){heldHits++;return}}
+    hideQuality(index,'center-quality-not-ready');
   }
 
   window.addEventListener('journey-frame-presented',e=>{const d=e.detail||{},i=Number(d.index);if(Number.isFinite(i))present(i)});
-  window.addEventListener('journey-playback-started',()=>{ensureLayer();setTimeout(schedule,20)});
+  window.addEventListener('journey-playback-started',()=>{ensureLayer();setTimeout(schedule,10)});
   window.addEventListener('journey-stream-updated',schedule);
-  setInterval(schedule,55);
+  setInterval(schedule,45);
 
   window.__journeyHybridQuality={version:VERSION,state:()=>({
-    version:VERSION,mode:'1024-direct-predecoded-full-frame-256-continuity',renderMode:'direct-predecoded-full-frame',exactFrameOnly:true,
+    version:VERSION,mode:'feathered-center-1024-over-256',renderMode:'feathered-center-1024-over-256',exactFrameOnly:false,
     rawAhead:rawAhead(),requiredRawAhead:requiredRawAhead(),remainingAhead:remainingAhead(),stride:lastStride,minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,maxInflight:MAX_QUALITY_INFLIGHT,
-    cache:cache.size,inflight:inflight.size,rejected:rejected.size,loads,errors,resolutionMismatches,decodeErrors,exactHits,heldHits:0,misses,lowAheadSkips,directBypassLoads,currentKey,
-    currentLongEdge:currentKey>=0?Math.max(cache.get(currentKey)?.naturalWidth||0,cache.get(currentKey)?.naturalHeight||0):0,
-    currentTier:currentKey>=0?'1024':null,
-    fullFrameHighRes:currentKey>=0
+    prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,cache:cache.size,inflight:inflight.size,rejected:rejected.size,loads,errors,resolutionMismatches,decodeErrors,exactHits,heldHits,misses,lowAheadSkips,directBypassLoads,currentKey,
+    currentLongEdge:currentKey>=0?Math.max(cache.get(currentKey)?.naturalWidth||cache.get(currentKey-1)?.naturalWidth||0,cache.get(currentKey)?.naturalHeight||cache.get(currentKey-1)?.naturalHeight||0):0,
+    currentTier:currentKey>=0?'1024-center':null,fullFrameHighRes:false,centerHighRes:currentKey>=0,
+    sourceCropSupported:false,qualityNote:'Mapillary thumb_1024_url is fetched as a JPEG; only the visible center is composited and the quality cache is local/short-lived.'
   })};
-  emit('ready',{mode:'1024-direct-predecoded-full-frame-256-continuity',renderMode:'direct-predecoded-full-frame',exactFrameOnly:true,minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,maxInflight:MAX_QUALITY_INFLIGHT,directBypass:true});
+  emit('ready',{mode:'feathered-center-1024-over-256',renderMode:'feathered-center-1024-over-256',minRawAhead:MIN_RAW_AHEAD,fullRateRawAhead:FULL_RATE_RAW_AHEAD,prefetchFrom:PREFETCH_FROM,prefetchTo:PREFETCH_TO,maxInflight:MAX_QUALITY_INFLIGHT,maxHoldAge:MAX_HOLD_AGE,directBypass:true,sourceCropSupported:false});
 })();
