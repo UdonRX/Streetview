@@ -2,9 +2,9 @@
 (()=>{
   if(window.__journeyPlaybackLoggerInstalled)return;
   window.__journeyPlaybackLoggerInstalled=true;
-  const VERSION='0.1.51-acd-log',MAX_EVENTS=320,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
+  const VERSION='0.1.52-acd-log',MAX_EVENTS=320,POLL_MS=160,STALL_MS=650,RAF_GAP_MS=180;
   const trace={schema:'streetview-journey-playback-diagnostic-v3',version:VERSION,startedAt:null,events:[]};
-  let active=false,t0=0,lastIndex=null,lastAdvance=0,lastStall=0,lastRaf=performance.now(),transportSignature='';
+  let active=false,t0=0,lastIndex=null,lastAdvance=0,lastStall=0,lastRaf=performance.now(),transportSignature='',opticalVisibilityTicket=0;
   const round=v=>Number.isFinite(v)?Math.round(v*10)/10:null;
   const loadStats={raw:{start:0,complete:0,timeout:0,error:0,totalMs:0,maxMs:0},analysis:{start:0,complete:0,timeout:0,error:0,totalMs:0,maxMs:0}};
   function compact(){
@@ -29,9 +29,14 @@
   function start(detail={}){if(active)return;active=true;t0=performance.now();trace.startedAt=new Date().toISOString();lastIndex=null;lastAdvance=t0;lastStall=0;log('playback-trace-start',{detail,state:compact()})}
   async function copy(){const payload={...trace,exportedAt:new Date().toISOString(),current:compact()};const text=JSON.stringify(payload,null,2);try{await navigator.clipboard.writeText(text);return true}catch{}try{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();return true}catch{return false}}
   function installButton(){let btn=document.getElementById('playbackLogCopy');if(!btn){btn=document.createElement('button');btn.id='playbackLogCopy';btn.type='button';document.body.appendChild(btn)}btn.textContent='再生ログコピー';btn.style.cssText='position:fixed;z-index:31;right:10px;top:calc(env(safe-area-inset-top) + 98px);height:30px;padding:0 9px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(5,8,12,.58);color:#fff;font:700 9px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:auto';btn.onclick=async e=>{e.preventDefault();e.stopPropagation();const ok=await copy();btn.textContent=ok?'コピー完了':'コピー失敗';setTimeout(()=>btn.textContent='再生ログコピー',1000)}}
+  function scheduleOpticalVisibility(index){
+    const ticket=++opticalVisibilityTicket,b=window.__journeyOpticalBridge;if(!b?.getPreparedPair)return;
+    const ms=Number(b.getSpeedMs?.()||window.__journeyPlaybackState?.targetMs||80),delay=Math.max(6,ms*.5-4);
+    setTimeout(()=>{if(ticket!==opticalVisibilityTicket||Number(b.getCurrentIndex?.())!==index)return;const pair=b.getPreparedPair(index),gate=window.__journeyHybridQuality?.test?.pairGate;if(!pair||typeof gate!=='function'||gate(index,pair))return;const shell=document.getElementById('journeyAdaptiveQualityShell');if(shell)shell.style.opacity='0'},delay)
+  }
   window.__copyJourneyPlaybackLog=copy;
   window.addEventListener('journey-playback-started',e=>{start(e.detail||{});maybeClassifyTransport(true)});
-  window.addEventListener('journey-frame-presented',e=>{if(active)log('present',e.detail||{})});
+  window.addEventListener('journey-frame-presented',e=>{const i=Number(e.detail?.index);if(active)log('present',e.detail||{});if(Number.isFinite(i))scheduleOpticalVisibility(i)});
   window.addEventListener('journey-image-wait-start',e=>{if(active)log('wait-start',e.detail||{})});
   window.addEventListener('journey-image-wait-resolved',e=>{if(active)log('wait-resolved',e.detail||{})});
   window.addEventListener('journey-image-load',e=>{const d=e.detail||{},kind=d.purpose==='analysis'?'analysis':'raw',s=loadStats[kind];if(d.phase==='start')s.start++;else if(d.phase==='complete'){s.complete++;const ms=Number(d.elapsedMs)||0;s.totalMs+=ms;s.maxMs=Math.max(s.maxMs,ms)}else if(d.phase==='timeout')s.timeout++;else if(d.phase==='error')s.error++;if(!active)return;if(['start','complete','timeout','error','optical-paused','optical-resumed'].includes(d.phase))log(`load-${d.phase}`,{index:d.index??null,purpose:kind,transport:d.transport||null,variant:d.variant||null,elapsedMs:d.elapsedMs??null,timeoutMs:d.timeoutMs??null,width:d.width??null,height:d.height??null,contiguousRawAhead:d.contiguousRawAhead??null})});
