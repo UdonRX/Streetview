@@ -1,10 +1,8 @@
 {
-  "name": "Streetview Journey",
+  "name": "Streetview MapillaryJS",
   "short_name": "Streetview",
-  "description": "見るだけで進む全自動ストリートビュー旅行",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#05070a",
-  "theme_color": "#05070a",
-  "orientation": "any"
+  "background_color": "#050b0a",
+  "theme_color": "#050b0a"
 }

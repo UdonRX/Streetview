@@ -1,32 +1,33 @@
-# Streetview Journey
+# Streetview — MapillaryJS
 
-Current milestone: **Phase 2 — Real Coverage Map UI**
+このリポジトリは **MapillaryJS 4.1.2 公式 Viewer を使った旅表示**だけに整理しています。
 
-iPhone Safari/PWA向け、Mapillary / KartaViewに画像が存在する道路を地図から見つけ、Phase 1で固めたJourney Engineへつなぐプロジェクト。
+## 現在の構成
 
-## Phase 2 — 実データ＋地図UI
-- 起動画面 `/` を MapLibre GL JS + OpenFreeMap の実地図UIへ変更
-- KartaView Coverage Tile を認証なしで起動直後から表示
-- Mapillary `mly1_public` Vector Tiles の sequence / image レイヤーを実装
-- Mapillary Access Token は端末の localStorage のみに保存し、GitHubへ埋め込まない
-- 撮影済みルートはKartaViewとMapillaryで色を分け、発光するよう重ねて表示
-- 現在地・ズーム・回転操作をMapLibre標準Controlで利用可能
-- Phase 1のJourney画面は `/journey.html` にそのまま保存して凍結
-- Vercel Functionは `api/imagery.js` 1個のまま。Phase 2地図UIは静的ファイルのみ
+- `index.html` — 到着地点 → 出発地点のルート選択と公式Viewer UI
+- `core.js` — 共通状態・設定・Diagnostics用ユーティリティ
+- `route.js` — Mapillary Graph APIによるsequence探索とGPSベースの進行方向決定
+- `preload.js` — 表示Viewerと共有する公式 `GraphDataProvider` の先読み
+- `viewer.js` — `TransitionMode.Default` の表示、0.8秒基準の自動再生、視点保持、逆走監視
+- `app.js` — 起動とUIイベントの接続
+- `manifest.webmanifest` — iPhone PWA用
+- `sw.js` — 旧Journeyキャッシュを一度削除して自己解除する移行用cleanup worker
 
-## Phase 1 — Frozen
-目標は「画像が変わった瞬間の傾き」を大幅に消すこと。Jakarta / Brașov / Sinaiaで検証し、Visual Override Guard、分散Preflight、Local Heading補正を含むv0.1.30で凍結。
+## 表示方式
 
-## Roadmap
-1. Phase 1: Camera Stabilization / Direction-aware Travel Axis — **Frozen**
-2. Phase 2: MapLibre + OpenFreeMap + Mapillary/KartaView実データ地図UI — **Current**
-3. Phase 3: Overpass + Wikipedia/Wikimediaによる到着地選択
-4. Phase 4: Journey Graph / 出発地 / 距離 / 所要時間 / 出発・到着時刻
-5. Phase 5: Duplicate / Gap / Quality / Adaptive Sampling / Exposure
-6. Phase 6: Depth-aware Forward Flow / Terrain-aware Motion / Elevation
-7. Phase 7: TWGL/WebGL + Worker/Comlink GPU Journey Renderer
-8. Phase 8: Gap / Depth Mesh / Occlusion補完
-9. Phase 9: 道路・登山道・森・山・海岸・展望地・360/Fisheyeの全地形対応
-10. Phase 10: 仮想現在時刻・ETA・移動距離・残距離・到着演出を含むJourney UX
+表示は MapillaryJS の標準機能だけを使用します。
 
-> バージョンごとの複製ファイルは作らない。機能上独立したモジュールだけ安定したファイル名で維持し、Vercel Hobby内・Function 1個を維持する。
+- `Viewer`
+- `imageTiling: true`
+- WebGL
+- `TransitionMode.Default`
+- `viewer.moveTo()`
+- Mapillary `GraphDataProvider`
+
+FOE、消失点、Optical Flow、travel-axis、pedestrian-axis、mountain-axis、CENTER LOCK、自作Canvas画像表示、自作256/1024 Overlayは使用しません。
+
+## 先読み
+
+出発地点が決まった時点で先読みを開始します。表示Viewerと同じ公式 `GraphDataProvider` を共有し、画像・mesh・clusterをメモリに保持します。別Viewerを走らせる方式は使用しません。
+
+先読みは待ち時間を抑えるため、最初の少数フレームから実効ロード速度を測り、0.8秒再生に必要な範囲だけを適応的に準備します。再生中も残りをバックグラウンドで補充します。

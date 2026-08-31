@@ -2,148 +2,62 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#07110f" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <meta name="theme-color" content="#050b0a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Streetview" />
   <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="/map.css" />
-  <link rel="stylesheet" href="/phase3.css?v=0.3.1" />
-  <title>Streetview Journey — Phase 4 Journey Graph</title>
+  <title>Streetview — MapillaryJS</title>
   <style>
-    .test-route-panel{position:fixed;z-index:10;top:calc(env(safe-area-inset-top,0px) + 84px);left:12px;right:12px;pointer-events:none}.test-route-card{pointer-events:auto;display:grid;gap:8px;padding:10px 11px;border:1px solid rgba(255,255,255,.13);border-radius:16px;background:rgba(5,13,12,.86);box-shadow:0 10px 34px rgba(0,0,0,.28);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.test-route-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.test-route-head b{font-size:11px}.test-route-head small{font-size:8px;color:rgba(255,255,255,.48)}.test-route-buttons{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.test-route-buttons::-webkit-scrollbar{display:none}.test-route-button{flex:0 0 auto;display:grid;gap:2px;min-width:104px;padding:8px 10px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(255,255,255,.055);color:#fff;text-align:left}.test-route-button strong{font-size:11px}.test-route-button span{font-size:8px;color:rgba(255,255,255,.48)}.test-route-button em{font-size:7px;font-style:normal;color:#73ffa1}.test-route-button[data-fixed-state="loading"] em{color:#ffe19a}.test-route-button[data-fixed-state="error"] em{color:#ffb6a7}.test-route-button.is-active{background:#fff;color:#07110f}.test-route-button.is-active span,.test-route-button.is-active em{color:rgba(7,17,15,.58)}.test-route-status{font-size:8px;line-height:1.45;color:rgba(255,255,255,.56)}@media(orientation:landscape){.test-route-panel{right:auto;width:min(430px,48vw)}}
+    :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Hiragino Sans",sans-serif;background:#050b0a;color:#fff}
+    *{box-sizing:border-box}html,body,#mly,#routeMap{width:100%;height:100%;margin:0;overflow:hidden}body{background:#050b0a}button,input{font:inherit}
+    #mly{position:fixed;inset:0;background:#020504;touch-action:none}.screen[hidden]{display:none!important}
+    .top{position:fixed;z-index:20;top:calc(env(safe-area-inset-top,0px) + 10px);left:10px;right:10px;display:flex;justify-content:space-between;align-items:flex-start;gap:8px;pointer-events:none}
+    .glass{border:1px solid rgba(255,255,255,.14);background:rgba(5,12,11,.78);box-shadow:0 12px 34px rgba(0,0,0,.3);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+    .title{padding:9px 11px;border-radius:14px;display:grid;gap:2px;max-width:72vw}.title b{font-size:12px}.title small{font-size:8px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .back{pointer-events:auto;min-height:38px;padding:0 12px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(5,12,11,.78);color:#fff;font-weight:800;font-size:10px;text-decoration:none;display:grid;place-items:center;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+    .controls{position:fixed;z-index:22;left:10px;right:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 10px);padding:10px;border-radius:17px;display:grid;gap:8px}
+    .control-row{display:grid;grid-template-columns:1fr 1fr auto;gap:7px}.controls button{min-height:42px;border:1px solid rgba(255,255,255,.13);border-radius:12px;background:rgba(255,255,255,.07);color:#fff;font-size:10px;font-weight:800}.controls .primary{background:#fff;color:#07110f}.controls button:disabled{opacity:.4}
+    .speed{display:flex;align-items:center;gap:8px;font-size:9px;color:rgba(255,255,255,.6)}.speed input{width:100%;accent-color:#fff}.speed output{width:52px;text-align:right;color:#fff;font-variant-numeric:tabular-nums}
+    .status{font-size:9px;line-height:1.45;color:rgba(255,255,255,.68);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.preload-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-size:8px;color:rgba(255,255,255,.5)}.bar{height:4px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}.bar i{display:block;height:100%;width:0;background:#fff;transition:width .2s}
+    .diag{position:fixed;z-index:21;top:calc(env(safe-area-inset-top,0px) + 73px);right:10px;width:min(350px,calc(100vw - 20px));max-height:calc(100vh - 285px - env(safe-area-inset-bottom,0px));overflow:auto;padding:10px;border-radius:15px;display:none}.diag.is-open{display:block}.diag-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}.diag-head b{font-size:10px}.diag-head button{border:1px solid rgba(255,255,255,.12);border-radius:9px;background:rgba(255,255,255,.06);color:#fff;padding:6px 9px;font-size:8px}.grid{display:grid;grid-template-columns:1fr auto;gap:5px 9px;font-size:8px;line-height:1.35}.grid span{color:rgba(255,255,255,.5)}.grid b{font-variant-numeric:tabular-nums;text-align:right;max-width:210px;overflow-wrap:anywhere}.note{margin:8px 0 0;font-size:7px;line-height:1.45;color:rgba(255,255,255,.42)}
+    .sheet{position:fixed;z-index:40;inset:0;display:grid;place-items:end center;padding:12px 12px calc(env(safe-area-inset-bottom,0px) + 12px);background:rgba(0,0,0,.42)}.sheet[hidden]{display:none}.sheet-card{width:min(520px,100%);padding:16px;border-radius:22px;background:#0b1513;border:1px solid rgba(255,255,255,.14)}.sheet-card h1{font-size:18px;margin:0 0 6px}.sheet-card p{font-size:10px;line-height:1.55;color:rgba(255,255,255,.58);margin:0 0 12px}.sheet-card input{width:100%;min-height:44px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.06);color:#fff;padding:0 12px}.sheet-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:9px}.sheet-actions button{min-height:42px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.07);color:#fff;font-weight:800}.sheet-actions .save{background:#fff;color:#07110f}
+    #planner{position:fixed;inset:0;background:#07110f;z-index:50}.planner-head{position:fixed;z-index:55;top:calc(env(safe-area-inset-top,0px) + 10px);left:10px;right:10px;padding:11px 12px;border-radius:16px;display:grid;gap:4px;pointer-events:none}.planner-head b{font-size:12px}.planner-head span{font-size:9px;color:rgba(255,255,255,.65)}.planner-head button{pointer-events:auto;position:absolute;right:9px;top:9px;min-height:34px;padding:0 10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.06);color:#fff;font-size:9px;font-weight:800}
+    .planner-bottom{position:fixed;z-index:55;left:10px;right:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 10px);padding:11px;border-radius:16px;display:grid;gap:8px}.planner-bottom strong{font-size:11px}.planner-bottom small{font-size:8px;line-height:1.5;color:rgba(255,255,255,.55)}.planner-actions{display:grid;grid-template-columns:1fr auto;gap:8px}.planner-actions button{min-height:42px;border:1px solid rgba(255,255,255,.13);border-radius:12px;background:rgba(255,255,255,.07);color:#fff;font-size:10px;font-weight:800}.planner-actions .primary{background:#fff;color:#07110f}.planner-actions button:disabled{opacity:.4}.planner-progress{display:grid;gap:5px}.planner-progress[hidden]{display:none}.maplibregl-ctrl-bottom-right{bottom:120px}
+    @media(orientation:landscape){.controls{left:10px;right:auto;width:min(430px,44vw)}.diag{top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;max-height:calc(100vh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px) - 20px)}.planner-bottom{right:auto;width:min(430px,44vw)}}
   </style>
 </head>
 <body>
-  <main class="coverage-app">
-    <div id="coverageMap" class="coverage-map" aria-label="MapillaryとKartaViewを統合したJourney Graph地図"></div>
-    <header class="map-header">
-      <div><span class="phase">PHASE 4</span><strong>STREETVIEW</strong><small>Mapillary × KartaView Journey Graph</small></div>
-      <a class="journey-link" href="/journey.html">Journey Engine</a>
-    </header>
-    <section class="test-route-panel" aria-label="ジャンル別テストルート">
-      <div class="test-route-card">
-        <div class="test-route-head"><b>ジャンル別テストルート</b><small>Mapillary 4種 + MapillaryJS</small></div>
-        <div id="testRouteButtons" class="test-route-buttons"></div>
-        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路は従来通り。MapillaryJSは公式Viewerだけを使う専用比較テスト。</div>
-      </div>
-    </section>
-    <section class="provider-panel" aria-label="撮影データ表示設定">
-      <div class="provider-head"><div><b>Journey Graph</b><small>到着地を決めて、地図上で出発地点をタップ</small></div><span id="mapStatus">地図を準備中</span></div>
-      <div class="provider-row">
-        <label class="provider-chip karta"><input id="kartaToggle" type="checkbox" checked><span class="dot"></span><span><b>KartaView</b><small id="kartaStatus">接続中</small></span></label>
-        <label class="provider-chip mapillary"><input id="mapillaryToggle" type="checkbox"><span class="dot"></span><span><b>Mapillary</b><small id="mapillaryStatus">トークン未設定</small></span></label>
-        <button id="mapillarySettings" class="settings-button" type="button" aria-label="Mapillary設定">•••</button>
-      </div>
-      <p class="hint">通常ルートは従来通り地図選択。ジャンル別テストは小さい範囲を分割検索し、約200枚のsequence区間を端末に固定する。</p>
-    </section>
-  </main>
-  <section id="tokenSheet" class="token-sheet" hidden aria-label="Mapillary access token設定">
-    <button id="tokenBackdrop" class="sheet-backdrop" type="button" aria-label="閉じる"></button>
-    <div class="sheet-card"><div class="sheet-handle"></div><span class="phase">MAPILLARY</span><h1>撮影済みルートを重ねる</h1><p>Mapillary Vector Tilesの表示にはAccess Tokenが必要。入力値はこの端末のlocalStorageだけに保存し、GitHubには書き込まない。</p><label>Access Token<input id="mapillaryToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="MLY|..." /></label><div class="sheet-actions"><button id="saveToken" class="primary" type="button">保存して表示</button><button id="removeToken" type="button">削除</button></div><button id="closeTokenSheet" class="close-sheet" type="button">閉じる</button></div>
+  <section id="planner" class="screen">
+    <div id="routeMap" aria-label="ルート選択地図"></div>
+    <header class="planner-head glass"><b id="plannerTitle">① 到着地点をタップ</b><span id="plannerHint">最初に旅の到着地点を地図で選ぶ</span><button id="tokenSettings" type="button">Token</button></header>
+    <div class="planner-bottom glass">
+      <strong id="routeSummary">到着地点を選択してください</strong>
+      <small id="routeDetail">到着地点 → 出発地点の順に決める。出発地点が決まった瞬間からMapillaryの先読みを開始する。</small>
+      <div id="plannerProgress" class="planner-progress" hidden><div class="bar"><i id="plannerBar"></i></div><small id="plannerProgressText">ルートを確認中…</small></div>
+      <div class="planner-actions"><button id="resetRoute" type="button">やり直す</button><button id="openViewer" class="primary" type="button" disabled>Viewerを開く</button></div>
+    </div>
   </section>
+
+  <section id="viewerScreen" class="screen" hidden>
+    <div id="mly" aria-label="MapillaryJS公式Viewer"></div>
+    <header class="top"><div class="title glass"><b>MapillaryJS</b><small id="viewerRouteLabel">公式Viewer</small></div><button id="backToPlanner" class="back" type="button">ルート設定</button></header>
+    <section id="diag" class="diag glass"><div class="diag-head"><b>Diagnostics</b><button id="copyDiag" type="button">コピー</button></div><div id="diagGrid" class="grid"></div><p class="note">表示方式はMapillaryJS 4.1.2 / image tiling / WebGL / TransitionMode.Default。自作Canvas・Overlay・Optical Flowは使用しない。</p></section>
+    <section class="controls glass"><div class="control-row"><button id="start" class="primary" type="button" disabled>再生開始</button><button id="stop" type="button" disabled>停止</button><button id="toggleDiag" type="button">診断</button></div><label class="speed"><span>速度</span><input id="speed" type="range" min="450" max="1800" step="50" value="800" /><output id="speedOut">0.80s</output></label><div class="preload-row"><div class="bar"><i id="preloadBar"></i></div><span id="preloadText">先読み準備中</span></div><div id="status" class="status">MapillaryJSを準備中…</div></section>
+  </section>
+
+  <section id="tokenSheet" class="sheet" hidden><div class="sheet-card"><h1>Mapillary Access Token</h1><p>トークンはこのiPhoneのlocalStorageだけに保存し、GitHubには書き込まない。</p><input id="tokenInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="MLY|..." /><div class="sheet-actions"><button id="saveToken" class="save" type="button">保存</button><button id="cancelToken" type="button">閉じる</button></div></div></section>
+
   <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
-  <script type="module">
-    Promise.all([
-      import('https://esm.sh/@turf/turf@7.2.0'),
-      import('https://esm.sh/rbush@4.0.1'),
-      import('https://esm.sh/ngraph.graph@20.1.2'),
-      import('https://esm.sh/ngraph.path@1.6.1')
-    ]).then(([turf, rbush, graph, ngraphPath]) => {
-      window.__journeyGraphLibs = { turf, RBush: rbush.default, createGraph: graph.default, ngraphPath };
-      window.dispatchEvent(new CustomEvent('journey-graph-libs-ready'));
-    }).catch(error => {
-      console.error('[JourneyGraph] library load failed', error);
-      window.__journeyGraphLibsError = String(error?.message || error);
-    });
-  </script>
-  <script src="/phase3-fast.js?v=0.3.1"></script>
-  <script src="/map.js?v=0.3.1"></script>
-  <script src="/phase4-route.js?v=0.4.10"></script>
-  <script src="/kyoto-test-routes.js?v=0.2.0"></script>
-  <script>
-    (()=>{
-      const installMapillaryJsButton=()=>{
-        const box=document.getElementById('testRouteButtons');
-        if(!box||box.querySelector('[data-route="mapillaryjs"]'))return;
-        const button=document.createElement('button');
-        button.type='button';button.className='test-route-button';button.dataset.route='mapillaryjs';
-        button.innerHTML='<strong>MapillaryJS</strong><span>烏丸御池 → 四条烏丸</span><em>公式Viewer / 50 step</em>';
-        button.addEventListener('click',()=>{location.href='/mapillaryjs.html'});
-        box.appendChild(button);
-      };
-      installMapillaryJsButton();
-      const box=document.getElementById('testRouteButtons');
-      if(box){
-        const observer=new MutationObserver(installMapillaryJsButton);
-        observer.observe(box,{childList:true});
-        addEventListener('pagehide',()=>observer.disconnect(),{once:true});
-      }
-    })();
-  </script>
-  <script>
-    (()=>{
-      const REV='quiet-sidewalk-yodogawa-hirakata-v1';
-      const REV_KEY='streetview:quiet-sidewalk-route-revision';
-      const CACHE_KEY='streetview:kyoto-mapillary-fixed-routes:v3';
-      const SOURCE='kyoto-test-routes';
-      const QUIET={
-        name:'淀川河川敷（出口〜枚方）',
-        start:{lat:34.7983333,lng:135.6172222,name:'淀川河川公園・出口地区'},
-        end:{lat:34.8137998,lng:135.6370685,name:'淀川河川公園・枚方地区'},
-        maxEndpointM:900,
-        seedSequenceId:null,
-        search:{stops:[0,.16,.33,.5,.67,.84,1],offsets:[0,35,-35,70,-70],cellRadius:18,limits:[6,3]},
-        quietRoute:false,
-        routeRevision:REV
-      };
-      function geojson(routes){
-        const features=[];
-        for(const route of routes){
-          features.push({type:'Feature',properties:{id:route.id,label:route.label,name:route.name,kind:'line'},geometry:{type:'LineString',coordinates:[[route.start.lng,route.start.lat],[route.end.lng,route.end.lat]]}});
-          features.push({type:'Feature',properties:{id:route.id,label:`${route.label} 出発`,kind:'point'},geometry:{type:'Point',coordinates:[route.start.lng,route.start.lat]}});
-          features.push({type:'Feature',properties:{id:route.id,label:`${route.label} 到着`,kind:'point'},geometry:{type:'Point',coordinates:[route.end.lng,route.end.lat]}});
-        }
-        return {type:'FeatureCollection',features};
-      }
-      function refreshMap(routes,attempt=0){
-        const map=window.__streetviewCoverageMap,source=map?.getSource?.(SOURCE);
-        if(source?.setData){source.setData(geojson(routes));return}
-        if(attempt<30)setTimeout(()=>refreshMap(routes,attempt+1),120);
-      }
-      function apply(){
-        const api=window.__kyotoJourneyTestRoutes;
-        if(!api?.routes)return setTimeout(apply,30);
-        const route=api.routes.find(x=>x.id==='sidewalk');
-        if(!route)return;
-        try{
-          if(localStorage.getItem(REV_KEY)!==REV){
-            const cache=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');
-            if(cache&&typeof cache==='object'){
-              delete cache.sidewalk;
-              localStorage.setItem(CACHE_KEY,JSON.stringify(cache));
-            }
-            localStorage.setItem(REV_KEY,REV);
-          }
-        }catch{}
-        Object.assign(route,QUIET);
-        route.start={...QUIET.start};route.end={...QUIET.end};route.search={...QUIET.search};
-        const button=document.querySelector('[data-route="sidewalk"]');
-        if(button){
-          const span=button.querySelector('span'),badge=button.querySelector('em');
-          if(span)span.textContent=`${QUIET.start.name} → ${QUIET.end.name}`;
-          if(badge)badge.textContent='タップで固定';
-          button.dataset.fixedState='idle';
-        }
-        const status=document.getElementById('testRouteStatus');
-        if(status)status.textContent='歩道テストは大阪・淀川河川敷（出口地区〜枚方地区）。人の少ない長い河川敷区間を小分け探索し、約200枚を固定する。';
-        refreshMap(api.routes);
-      }
-      apply();
-    })();
-  </script>
-  <script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js?v=0.1.49').catch(()=>{}));</script>
+  <script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
+  <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js?cleanup=1').catch(()=>{});</script>
+  <script src="/core.js"></script>
+  <script src="/route.js"></script>
+  <script src="/preload.js"></script>
+  <script src="/viewer.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
