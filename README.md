@@ -1,33 +1,35 @@
-# Streetview — MapillaryJS
+# Streetview Journey
 
-このリポジトリは **MapillaryJS 4.1.2 公式 Viewer を使った旅表示**だけに整理しています。
+MapillaryJS公式Viewerを中核にした、iPhone Safari/PWA向けの旅行UI。
 
-## 現在の構成
+## 現在のUIフロー
+1. 地図上の観光地・展望地・山アイコン、または検索から到着地点を選ぶ。
+2. `旅をはじめる` で到着地点付近のMapillary sequenceを候補ルートとして強調表示。
+3. 実画像ルートをタップし、`出発地登録` で出発地点を決定。
+4. 出発地登録と同時に、Mapillary先読みと標高取得を並列開始。
+5. ボトムシートに総距離、標高プロファイル、出発時刻、到着予定時刻、上り量を表示。
+6. `旅をはじめる` でMapillaryJS Viewerを開き、そのまま自動再生開始。
+7. Journey中は距離ベースの再生バー、出発/到着時刻、進んだ距離、残距離、1フレーム移動距離を表示。
+8. 再生バーはスワイプ/ドラッグで任意位置へ移動。再生/一時停止を切替可能。
+9. 到着後は `旅を完了させる` で地図へ戻る。
 
-- `index.html` — 到着地点 → 出発地点のルート選択と公式Viewer UI
-- `core.js` — 共通状態・設定・Diagnostics用ユーティリティ
-- `route.js` — Mapillary Graph APIによるsequence探索とGPSベースの進行方向決定
-- `preload.js` — 表示Viewerと共有する公式 `GraphDataProvider` の先読み
-- `viewer.js` — `TransitionMode.Default` の表示、0.8秒基準の自動再生、視点保持、逆走監視
-- `app.js` — 起動とUIイベントの接続
-- `manifest.webmanifest` — iPhone PWA用
-- `sw.js` — 旧Journeyキャッシュを一度削除して自己解除する移行用cleanup worker
-
-## 表示方式
-
-表示は MapillaryJS の標準機能だけを使用します。
-
-- `Viewer`
+## 表示方式（固定）
+- MapillaryJS 4.1.2
 - `imageTiling: true`
 - WebGL
 - `TransitionMode.Default`
-- `viewer.moveTo()`
-- Mapillary `GraphDataProvider`
+- 画像切替は公式 `viewer.moveTo()`
+- 自作Canvas画像表示、FOE、Optical Flow、travel-axis等は使用しない。
 
-FOE、消失点、Optical Flow、travel-axis、pedestrian-axis、mountain-axis、CENTER LOCK、自作Canvas画像表示、自作256/1024 Overlayは使用しません。
+## 外部サービス
+- MapLibre GL JS + OpenFreeMap: 地図
+- Mapillary Graph API / MapillaryJS: 実画像ルートとViewer
+- Overpass API: 観光地・展望地・山
+- Open-Meteo Elevation API: 標高プロファイル
+- Nominatim: 場所検索
 
-## 先読み
-
-出発地点が決まった時点で先読みを開始します。表示Viewerと同じ公式 `GraphDataProvider` を共有し、画像・mesh・clusterをメモリに保持します。別Viewerを走らせる方式は使用しません。
-
-先読みは待ち時間を抑えるため、最初の少数フレームから実効ロード速度を測り、0.8秒再生に必要な範囲だけを適応的に準備します。再生中も残りをバックグラウンドで補充します。
+## 再生継続性
+- 出発地登録中に同じMapillary DataProviderへ先読み。
+- 再生中も前方を継続先読み。
+- `moveTo()` は複数回リトライし、失敗フレームはスキップして再生ループを継続する。
+- ネットワーク断など外部要因まで完全無停止を保証することはできないが、単一画像の取得失敗ではJourneyを停止しない。
