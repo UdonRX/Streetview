@@ -23,9 +23,9 @@
       <div><span class="phase">PHASE 4</span><strong>STREETVIEW</strong><small>Mapillary × KartaView Journey Graph</small></div>
       <a class="journey-link" href="/journey.html">Journey Engine</a>
     </header>
-    <section class="test-route-panel" aria-label="京都市内テストルート">
+    <section class="test-route-panel" aria-label="ジャンル別テストルート">
       <div class="test-route-card">
-        <div class="test-route-head"><b>京都テストルート</b><small>約200枚固定 / 小分け探索</small></div>
+        <div class="test-route-head"><b>ジャンル別テストルート</b><small>約200枚固定 / 小分け探索</small></div>
         <div id="testRouteButtons" class="test-route-buttons"></div>
         <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路をタップすると、API負荷を抑えて約200枚の固定区間を作る。</div>
       </div>
@@ -37,7 +37,7 @@
         <label class="provider-chip mapillary"><input id="mapillaryToggle" type="checkbox"><span class="dot"></span><span><b>Mapillary</b><small id="mapillaryStatus">トークン未設定</small></span></label>
         <button id="mapillarySettings" class="settings-button" type="button" aria-label="Mapillary設定">•••</button>
       </div>
-      <p class="hint">通常ルートは従来通り地図選択。京都テストルートは小さい範囲を分割検索し、約200枚のsequence区間を端末に固定する。</p>
+      <p class="hint">通常ルートは従来通り地図選択。ジャンル別テストは小さい範囲を分割検索し、約200枚のsequence区間を端末に固定する。</p>
     </section>
   </main>
   <section id="tokenSheet" class="token-sheet" hidden aria-label="Mapillary access token設定">
@@ -65,18 +65,18 @@
   <script src="/kyoto-test-routes.js?v=0.2.0"></script>
   <script>
     (()=>{
-      const REV='quiet-sidewalk-shichijo-kujo-v1';
+      const REV='quiet-sidewalk-yodogawa-hirakata-v1';
       const REV_KEY='streetview:quiet-sidewalk-route-revision';
       const CACHE_KEY='streetview:kyoto-mapillary-fixed-routes:v3';
       const SOURCE='kyoto-test-routes';
       const QUIET={
-        name:'鴨川遊歩道（七条〜九条）',
-        start:{lat:34.98935,lng:135.76750,name:'七条大橋東岸'},
-        end:{lat:34.98039,lng:135.76780,name:'九条跨線橋東岸'},
-        maxEndpointM:650,
+        name:'淀川河川敷（出口〜枚方）',
+        start:{lat:34.7983333,lng:135.6172222,name:'淀川河川公園・出口地区'},
+        end:{lat:34.8137998,lng:135.6370685,name:'淀川河川公園・枚方地区'},
+        maxEndpointM:900,
         seedSequenceId:null,
-        search:{stops:[0,.25,.5,.75,1],offsets:[0,18,-18],cellRadius:12,limits:[6,3]},
-        quietRoute:true,
+        search:{stops:[0,.16,.33,.5,.67,.84,1],offsets:[0,35,-35,70,-70],cellRadius:18,limits:[6,3]},
+        quietRoute:false,
         routeRevision:REV
       };
       function geojson(routes){
@@ -118,7 +118,7 @@
           button.dataset.fixedState='idle';
         }
         const status=document.getElementById('testRouteStatus');
-        if(status)status.textContent='歩道テストは人の少ない鴨川・七条〜九条区間。初回だけ軽量探索し、以後は約200枚を固定する。';
+        if(status)status.textContent='歩道テストは大阪・淀川河川敷（出口地区〜枚方地区）。人の少ない長い河川敷区間を小分け探索し、約200枚を固定する。';
         refreshMap(api.routes);
       }
       apply();
