@@ -1,10 +1,10 @@
-/* Streetview Journey SIDEWALK runtime — strict centered 1024 primary lane */
+/* Streetview Journey SIDEWALK runtime — retained strict-centered 1024 lane */
 (()=>{
   'use strict';
   if(window.__pedestrianAxisFixInstalled)return;
   window.__pedestrianAxisFixInstalled=true;
 
-  const VERSION='0.4.1-sidewalk-strict-center1024';
+  const VERSION='0.4.2-sidewalk-retained-strict-center1024';
   const ROUTE_KEY='streetview:journey-route';
   const BOOTSTRAP_FRAMES=8;
   const PREFETCH_AHEAD=30;
@@ -12,7 +12,8 @@
   const PREFETCH_TIMEOUT_MS=2600;
   const CENTER_X=50;
   const STRICT_CANVAS_ID='sidewalkStrictCenterCanvas';
-  const DISPLAY_CACHE_LIMIT=24;
+  const DISPLAY_CACHE_LIMIT=44;
+  const CENTER_EVALUATION_END_INDEX=149;
 
   const ready1024=new Set();
   const failed1024=new Set();
@@ -30,6 +31,7 @@
   let total1024Errors=0;
   let strictCenterIndex=-1;
   let strictCenterDraws=0;
+  let strictRenderMisses=0;
   let strictSourceWidth=0;
   let strictSourceHeight=0;
 
@@ -75,7 +77,7 @@
     if(!Number.isFinite(Number(frame.__sidewalkOriginalHeading))&&Number.isFinite(Number(frame.heading)))frame.__sidewalkOriginalHeading=Number(frame.heading);
     frame.heading=null;
     frame.projectionYaw=null;
-    frame.headingSource='sidewalk-photo-center-50-strict';
+    frame.headingSource='sidewalk-photo-center-50-retained-strict';
     frame.journeyProfile='SIDEWALK';
     frame.photoCenterX=CENTER_X;
     frame.preferredImageTier='1024';
@@ -87,7 +89,14 @@
     if(route){
       route.journeyProfile='SIDEWALK';
       route.profileIsolation=true;
-      route.presentationProfile={...(route.presentationProfile||{}),photoCenterX:CENTER_X,preferredImageTier:'1024',strictPhotoCenter:true,sidewalkRuntime:VERSION};
+      route.presentationProfile={
+        ...(route.presentationProfile||{}),
+        photoCenterX:CENTER_X,
+        preferredImageTier:'1024',
+        strictPhotoCenter:true,
+        centerEvaluationEndIndex:CENTER_EVALUATION_END_INDEX,
+        sidewalkRuntime:VERSION
+      };
     }
   }
 
@@ -105,35 +114,53 @@
   }
   function frameForRequest(value){rebuildUrlIndex();return urlIndex.get(unwrap(value))||null}
 
+  function rememberDisplayImage(key,image){
+    if(!key||!image||!image.naturalWidth||!image.naturalHeight)return;
+    displayImages.delete(key);displayImages.set(key,image);
+    while(displayImages.size>DISPLAY_CACHE_LIMIT)displayImages.delete(displayImages.keys().next().value);
+  }
+  function hasDisplayFrame(index){
+    const frame=frames()[index];if(!frame)return false;
+    const im=displayImages.get(frameKey(frame,index));
+    return !!(im&&im.naturalWidth&&im.naturalHeight);
+  }
   function highResAhead(){
     const list=frames(),current=Math.max(0,Number(window.__journeyPlaybackState?.index)||0);let n=0;
     for(let i=current+1;i<Math.min(list.length,current+1+PREFETCH_AHEAD);i++){
-      if(!ready1024.has(frameKey(list[i],i)))break;n++;
+      const key=frameKey(list[i],i);
+      if(!ready1024.has(key)||!hasDisplayFrame(i))break;
+      n++;
     }
     return n;
   }
   function updateTier(){
     if(!isSidewalk()){currentTier='inactive';return}
     const list=frames(),i=Math.max(0,Number(window.__journeyPlaybackState?.index)||0),key=frameKey(list[i],i);
-    currentTier=ready1024.has(key)?'1024':'1024-loading';
+    currentTier=ready1024.has(key)&&hasDisplayFrame(i)?'1024':'1024-loading';
   }
 
   function queueFrame(index,priority=100){
     if(!isSidewalk())return;
     const list=frames(),frame=list[index];if(!frame)return;
     const key=frameKey(frame,index),url=frame.raw1024Url||frame.thumb_1024_url||null;
-    if(!url||ready1024.has(key)||failed1024.has(key)||queued1024.has(key)||inflight1024.has(key))return;
+    if(!url||failed1024.has(key)||queued1024.has(key)||inflight1024.has(key))return;
+    if(ready1024.has(key)&&hasDisplayFrame(index))return;
     queued1024.add(key);queue.push({index,key,url,priority});
   }
-  function finishPrefetch(task,ok){
+  function finishPrefetch(task,ok,image=null){
     inflight1024.delete(task.key);activePrefetch=Math.max(0,activePrefetch-1);
-    if(ok){ready1024.add(task.key);total1024Loads++}else{failed1024.add(task.key);total1024Errors++}
+    if(ok&&image?.naturalWidth){
+      ready1024.add(task.key);failed1024.delete(task.key);total1024Loads++;
+      rememberDisplayImage(task.key,image);
+      const current=Number(window.__journeyPlaybackState?.index);
+      if(Number.isFinite(current)&&current===Number(task.index))queueMicrotask(()=>strictRender(task.index));
+    }else{failed1024.add(task.key);total1024Errors++}
     updateTier();pumpPrefetch();
   }
   function startPrefetch(task){
     queued1024.delete(task.key);inflight1024.add(task.key);activePrefetch++;
     const im=new Image();im.decoding='async';im.referrerPolicy='no-referrer';let done=false;
-    const finish=ok=>{if(done)return;done=true;clearTimeout(timer);finishPrefetch(task,ok)};
+    const finish=ok=>{if(done)return;done=true;clearTimeout(timer);finishPrefetch(task,ok,ok?im:null)};
     im.onload=()=>finish(true);im.onerror=()=>finish(false);
     const timer=setTimeout(()=>{try{im.removeAttribute('src')}catch{}finish(false)},PREFETCH_TIMEOUT_MS);
     try{im.setAttribute('src',task.url)}catch{finish(false)}
@@ -143,46 +170,59 @@
     lockFrames();rebuildUrlIndex();
     const list=frames(),current=Math.max(0,Number(window.__journeyPlaybackState?.index)||0);
     const end=Math.min(list.length-1,Math.max(BOOTSTRAP_FRAMES-1,current+PREFETCH_AHEAD));
-    for(let i=current;i<=end;i++)queueFrame(i,i-current);
+    for(let i=current;i<=end;i++)queueFrame(i,i===current?-1000:i-current);
     queue.sort((a,b)=>a.priority-b.priority||a.index-b.index);
     while(activePrefetch<PREFETCH_CONCURRENCY&&queue.length)startPrefetch(queue.shift());
   }
 
-  function rememberDisplayImage(key,image){
-    if(!key||!image)return;
-    displayImages.delete(key);displayImages.set(key,image);
-    while(displayImages.size>DISPLAY_CACHE_LIMIT)displayImages.delete(displayImages.keys().next().value);
-  }
   function ensureStrictCanvas(){
     let canvas=document.getElementById(STRICT_CANVAS_ID);
     if(!canvas){
       const viewer=document.getElementById('viewer');if(!viewer)return null;
       canvas=document.createElement('canvas');canvas.id=STRICT_CANVAS_ID;canvas.setAttribute('aria-hidden','true');
-      Object.assign(canvas.style,{position:'absolute',inset:'0',width:'100%',height:'100%',zIndex:'2',pointerEvents:'none',opacity:'0',filter:'brightness(.9) contrast(1.08) saturate(.94)',transform:'none'});
+      Object.assign(canvas.style,{
+        position:'absolute',inset:'0',width:'100%',height:'100%',zIndex:'2',pointerEvents:'none',opacity:'0',
+        filter:'brightness(.9) contrast(1.08) saturate(.94)',transform:'none',transformOrigin:'50% 50%'
+      });
       viewer.appendChild(canvas);
     }
     canvas.style.display=isSidewalk()?'block':'none';
     return canvas;
   }
   function strictRender(index){
-    if(!isSidewalk()||!Number.isFinite(Number(index)))return false;
+    index=Number(index);
+    if(!isSidewalk()||!Number.isFinite(index))return false;
     const list=frames(),frame=list[index];if(!frame)return false;
     const key=frameKey(frame,index),im=displayImages.get(key);
-    if(!im||!im.naturalWidth||!im.naturalHeight)return false;
+    if(!im||!im.naturalWidth||!im.naturalHeight){
+      strictRenderMisses++;
+      queueFrame(index,-2000);pumpPrefetch();
+      return false;
+    }
+    rememberDisplayImage(key,im);
     const canvas=ensureStrictCanvas();if(!canvas)return false;
     const viewer=document.getElementById('viewer');
     const cssW=Math.max(1,viewer?.clientWidth||window.innerWidth||390),cssH=Math.max(1,viewer?.clientHeight||window.innerHeight||844);
     const dpr=Math.min(window.devicePixelRatio||1,2),w=Math.max(1,Math.round(cssW*dpr)),h=Math.max(1,Math.round(cssH*dpr));
     if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}
     const g=canvas.getContext('2d',{alpha:false});if(!g)return false;
-    const scale=Math.max(w/im.naturalWidth,h/im.naturalHeight),dw=im.naturalWidth*scale,dh=im.naturalHeight*scale;
+    const scale=Math.max(w/im.naturalWidth,h/im.naturalHeight);
+    const dw=im.naturalWidth*scale,dh=im.naturalHeight*scale;
     const x=(w-dw)/2,y=(h-dh)/2;
-    g.setTransform(1,0,0,1,0,0);g.globalAlpha=1;g.filter='none';g.fillStyle='#05070a';g.fillRect(0,0,w,h);g.drawImage(im,x,y,dw,dh);
-    canvas.style.opacity='1';strictCenterIndex=Number(index);strictCenterDraws++;strictSourceWidth=im.naturalWidth;strictSourceHeight=im.naturalHeight;
-    try{window.dispatchEvent(new CustomEvent('sidewalk-strict-center-rendered',{detail:{index:Number(index),sourceWidth:im.naturalWidth,sourceHeight:im.naturalHeight,canvasWidth:w,canvasHeight:h,sourceCenterX:50,sourceCenterY:50}}))}catch{}
+    g.setTransform(1,0,0,1,0,0);g.globalAlpha=1;g.filter='none';g.fillStyle='#05070a';g.fillRect(0,0,w,h);
+    g.drawImage(im,x,y,dw,dh);
+    canvas.style.opacity='1';
+    strictCenterIndex=index;strictCenterDraws++;strictSourceWidth=im.naturalWidth;strictSourceHeight=im.naturalHeight;
+    try{window.dispatchEvent(new CustomEvent('sidewalk-strict-center-rendered',{detail:{
+      index,sourceWidth:im.naturalWidth,sourceHeight:im.naturalHeight,canvasWidth:w,canvasHeight:h,
+      sourceCenterX:50,sourceCenterY:50,displayCacheSize:displayImages.size,evaluationFrame:index<=CENTER_EVALUATION_END_INDEX
+    }}))}catch{}
     return true;
   }
-  function hideStrictCanvas(){const c=document.getElementById(STRICT_CANVAS_ID);if(c)c.style.display='none'}
+  function hideStrictCanvas(){
+    const c=document.getElementById(STRICT_CANVAS_ID);if(c){c.style.display='none';c.style.opacity='0'}
+    strictCenterIndex=-1;
+  }
 
   function installSrcOverride(){
     if(srcWrapped)return true;
@@ -197,13 +237,15 @@
         const high=frame?.raw1024Url||frame?.thumb_1024_url||null;
         if(!frame||!high||failed1024.has(key)){previousSet.call(this,value);return}
         const started=performance.now();let settled=false;
-        const finish=(phase)=>{
+        const finish=phase=>{
           if(settled)return;settled=true;
           if(phase==='complete'){
-            ready1024.add(key);total1024Loads++;currentTier='1024';rememberDisplayImage(key,this);
+            ready1024.add(key);failed1024.delete(key);total1024Loads++;currentTier='1024';rememberDisplayImage(key,this);
             if(Number(window.__journeyPlaybackState?.index)===Number(index))strictRender(index);
           }else{failed1024.add(key);total1024Errors++}
-          emit(phase,{purpose:'raw',index,frameId:key,transport:'mapillary-direct',variant:'1024-sidewalk-primary',elapsedMs:Math.round(performance.now()-started),timeoutMs:PREFETCH_TIMEOUT_MS,width:this.naturalWidth||0,height:this.naturalHeight||0,contiguousRawAhead:highResAhead()});
+          emit(phase,{purpose:'raw',index,frameId:key,transport:'mapillary-direct',variant:'1024-sidewalk-primary',
+            elapsedMs:Math.round(performance.now()-started),timeoutMs:PREFETCH_TIMEOUT_MS,width:this.naturalWidth||0,height:this.naturalHeight||0,
+            contiguousRawAhead:highResAhead()});
           pumpPrefetch();
         };
         this.addEventListener('load',()=>finish('complete'),{once:true});
@@ -235,24 +277,32 @@
     wrapped.__sidewalk1024Wrapped=true;window.JourneyEngine.startFrames=wrapped;engineWrapped=true;return true;
   }
 
-  const state=()=>({
-    version:VERSION,enabled:isSidewalk(),journeyProfile:profile(),photoCenterX:CENTER_X,strictPhotoCenter:true,
-    currentImageTier:isSidewalk()?currentTier:'inactive',highResAhead:isSidewalk()?highResAhead():0,
-    ready1024:ready1024.size,failed1024:failed1024.size,queued1024:queue.length,active1024:activePrefetch,
-    total1024Loads,total1024Errors,prefetchAhead:PREFETCH_AHEAD,prefetchConcurrency:PREFETCH_CONCURRENCY,bootstrapFrames:BOOTSTRAP_FRAMES,
-    strictCenterIndex,strictCenterDraws,strictSourceWidth,strictSourceHeight,strictCanvasActive:!!document.getElementById(STRICT_CANVAS_ID)&&isSidewalk()
-  });
+  const state=()=>{
+    const c=document.getElementById(STRICT_CANVAS_ID);
+    return{
+      version:VERSION,enabled:isSidewalk(),journeyProfile:profile(),photoCenterX:CENTER_X,strictPhotoCenter:true,
+      centerEvaluationEndIndex:CENTER_EVALUATION_END_INDEX,
+      currentImageTier:isSidewalk()?currentTier:'inactive',highResAhead:isSidewalk()?highResAhead():0,
+      ready1024:ready1024.size,failed1024:failed1024.size,queued1024:queue.length,active1024:activePrefetch,
+      total1024Loads,total1024Errors,prefetchAhead:PREFETCH_AHEAD,prefetchConcurrency:PREFETCH_CONCURRENCY,bootstrapFrames:BOOTSTRAP_FRAMES,
+      strictCenterIndex,strictCenterDraws,strictRenderMisses,strictSourceWidth,strictSourceHeight,
+      strictDisplayCacheSize:displayImages.size,strictDisplayCacheLimit:DISPLAY_CACHE_LIMIT,
+      strictCanvasActive:!!(c&&isSidewalk()&&c.style.display!=='none'&&c.style.opacity==='1'&&strictCenterIndex>=0)
+    };
+  };
   window.__sidewalkJourneyRuntime={version:VERSION,state,lockFrames,pumpPrefetch,strictRender};
 
   function publishQualityState(){
     if(!isSidewalk())return;
     if(!window.__journeyHybridQuality||window.__journeyHybridQuality.__sidewalkShim){
       window.__journeyHybridQuality={__sidewalkShim:true,state:()=>({
-        networkClass:'NORMAL',networkSource:'sidewalk-1024-prefetch',currentImageTier:state().currentImageTier,
-        highResAhead:highResAhead(),loadEwmaMs:null,qualityCache:{ready1024:ready1024.size,failed1024:failed1024.size},
+        networkClass:'NORMAL',networkSource:'sidewalk-1024-retained-center',currentImageTier:state().currentImageTier,
+        highResAhead:highResAhead(),loadEwmaMs:null,
+        qualityCache:{ready1024:ready1024.size,failed1024:failed1024.size,display1024:displayImages.size},
         journeyQualityScore:null,qualityRejectedFrames:0,qualityUnknownFrames:0,qualityScoreFieldAvailable:null,
-        opticalConfidence:0,warpEnabled:false,warpFallbackReason:'sidewalk-profile-isolated-strict-center',intermediateFramesGenerated:0,warpRenderMs:0,
-        centerLockIndex:strictCenterIndex,strictPhotoCenter:true
+        opticalConfidence:0,warpEnabled:false,warpFallbackReason:'sidewalk-profile-isolated-retained-strict-center',
+        intermediateFramesGenerated:0,warpRenderMs:0,centerLockIndex:strictCenterIndex,strictPhotoCenter:true,
+        strictCanvasActive:state().strictCanvasActive,strictCenterDraws,strictRenderMisses,centerEvaluationEndIndex:CENTER_EVALUATION_END_INDEX
       })};
     }
   }
@@ -260,13 +310,18 @@
   installSrcOverride();installEngineWrapper();lockFrames();ensureStrictCanvas();pumpPrefetch();publishQualityState();
   window.addEventListener('journey-engine-ready',()=>{installEngineWrapper();lockFrames();ensureStrictCanvas();pumpPrefetch();publishQualityState()});
   window.addEventListener('journey-profile-changed',()=>{if(isSidewalk()){lockFrames();ensureStrictCanvas();pumpPrefetch();publishQualityState()}else hideStrictCanvas()});
-  window.addEventListener('journey-playback-started',e=>{if(isSidewalk()){lockFrames();strictRender(Number(e?.detail?.index)||0)}});
-  window.addEventListener('journey-frame-presented',e=>{if(!isSidewalk())return;lockFrames();pumpPrefetch();updateTier();strictRender(Number(e?.detail?.index))});
+  window.addEventListener('journey-playback-started',e=>{if(isSidewalk()){lockFrames();pumpPrefetch();strictRender(Number(e?.detail?.index)||0)}});
+  window.addEventListener('journey-frame-presented',e=>{
+    if(!isSidewalk())return;
+    lockFrames();pumpPrefetch();updateTier();strictRender(Number(e?.detail?.index));
+  });
   window.addEventListener('resize',()=>{if(isSidewalk()&&strictCenterIndex>=0)strictRender(strictCenterIndex)});
   setInterval(()=>{
     if(!isSidewalk()){hideStrictCanvas();return}
     installSrcOverride();installEngineWrapper();lockFrames();ensureStrictCanvas();pumpPrefetch();publishQualityState();updateTier();
+    const i=Math.max(0,Number(window.__journeyPlaybackState?.index)||0);
+    if(strictCenterIndex!==i)strictRender(i);
   },80);
 
-  window.__pedestrianAxisFix={version:VERSION,mode:'SIDEWALK-only strict source-center + 1024-primary',state,at:new Date().toISOString()};
+  window.__pedestrianAxisFix={version:VERSION,mode:'SIDEWALK-only retained strict source-center + 1024-primary',state,at:new Date().toISOString()};
 })();
