@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#050807" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Google SV — Streetview Journey Test</title>
+  <style>
+    :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;background:#050807;color:#fff}
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050807}button,input{font:inherit}
+    #pano{position:fixed;inset:0;background:#07110f}
+    .top{position:fixed;z-index:5;top:calc(env(safe-area-inset-top,0px) + 10px);left:10px;right:10px;display:flex;align-items:center;gap:8px;pointer-events:none}.top>*{pointer-events:auto}
+    .back,.icon{border:1px solid rgba(255,255,255,.16);background:rgba(5,8,7,.76);color:#fff;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:999px;height:40px;padding:0 14px}.title{min-width:0;flex:1;padding:8px 12px;border:1px solid rgba(255,255,255,.14);background:rgba(5,8,7,.76);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:14px}.title b{display:block;font-size:12px}.title small{display:block;margin-top:2px;color:rgba(255,255,255,.56);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .hud{position:fixed;z-index:5;left:10px;right:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 10px);display:grid;gap:8px;pointer-events:none}.hud>*{pointer-events:auto}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.stat{padding:8px 9px;border:1px solid rgba(255,255,255,.13);background:rgba(5,8,7,.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:12px}.stat small{display:block;font-size:8px;color:rgba(255,255,255,.5)}.stat b{display:block;margin-top:2px;font-size:13px}.controls{display:flex;gap:6px;align-items:center;padding:8px;border:1px solid rgba(255,255,255,.13);background:rgba(5,8,7,.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:14px}.controls button{border:0;border-radius:10px;padding:9px 11px;background:#fff;color:#07110f;font-weight:700}.controls button.secondary{background:rgba(255,255,255,.09);color:#fff}.controls label{display:grid;gap:2px;min-width:64px;font-size:7px;color:rgba(255,255,255,.5)}.controls input{width:64px;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;background:rgba(255,255,255,.06);color:#fff}.status{min-width:0;flex:1;font-size:9px;line-height:1.35;color:rgba(255,255,255,.65)}
+    .sheet[hidden]{display:none}.sheet{position:fixed;z-index:20;inset:0;display:grid;place-items:end center;padding:12px}.backdrop{position:absolute;inset:0;border:0;background:rgba(0,0,0,.62)}.card{position:relative;width:min(560px,100%);max-height:min(76vh,720px);overflow:auto;padding:16px;border:1px solid rgba(255,255,255,.15);border-radius:20px;background:#0b100e;box-shadow:0 20px 70px rgba(0,0,0,.45)}.card h1{margin:4px 0 8px;font-size:18px}.card p{margin:0 0 12px;font-size:11px;line-height:1.55;color:rgba(255,255,255,.62)}.card label{display:grid;gap:6px;font-size:10px;color:rgba(255,255,255,.65)}.card input{width:100%;border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:11px;background:rgba(255,255,255,.06);color:#fff}.actions{display:flex;gap:8px;margin-top:10px}.actions button{border:0;border-radius:10px;padding:10px 12px;background:#fff;color:#07110f;font-weight:700}.actions button.secondary{background:rgba(255,255,255,.08);color:#fff}.diag{font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;background:#050706;border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:10px;max-height:42vh;overflow:auto}.hint{font-size:9px!important}
+    @media(orientation:landscape){.hud{left:auto;width:min(520px,46vw)}.top{right:auto;width:min(520px,46vw)}}
+  </style>
+</head>
+<body>
+  <div id="pano" aria-label="Google Street View Panorama"></div>
+  <header class="top">
+    <button class="back" type="button" onclick="location.href='/'">‹ 戻る</button>
+    <div class="title"><b>Google SV</b><small>烏丸御池 → 四条烏丸 / Google StreetViewPanorama only</small></div>
+    <button id="openSettings" class="icon" type="button">API</button>
+    <button id="openDiag" class="icon" type="button">診断</button>
+  </header>
+  <section class="hud">
+    <div class="stats">
+      <div class="stat"><small>成功ステップ</small><b id="successStat">0 / 25</b></div>
+      <div class="stat"><small>平均 panoLoadMs</small><b id="loadStat">—</b></div>
+      <div class="stat"><small>目的地まで</small><b id="distanceStat">—</b></div>
+    </div>
+    <div class="controls">
+      <button id="startButton" type="button">テスト開始</button>
+      <button id="stopButton" class="secondary" type="button" disabled>停止</button>
+      <label>間隔 ms<input id="intervalInput" type="number" min="200" max="5000" step="50" value="700" /></label>
+      <label>最大 step<input id="stepsInput" type="number" min="1" max="30" step="1" value="25" /></label>
+      <div id="status" class="status">APIキーを保存すると開始できる。</div>
+    </div>
+  </section>
+
+  <section id="settingsSheet" class="sheet" hidden>
+    <button class="backdrop" type="button" data-close="settingsSheet" aria-label="閉じる"></button>
+    <div class="card">
+      <h1>Google Maps JavaScript API</h1>
+      <p>APIキーはこのiPhoneのlocalStorageだけに保存する。GitHubやVercelへ送信・保存しない。</p>
+      <label>API key<input id="apiKeyInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AIza..." /></label>
+      <div class="actions"><button id="saveKey" type="button">保存</button><button id="removeKey" class="secondary" type="button">削除</button><button class="secondary" type="button" data-close="settingsSheet">閉じる</button></div>
+      <p class="hint">Google Cloud側では Maps JavaScript API を有効化し、HTTPリファラー制限をこのVercelドメインに設定して使う。</p>
+    </div>
+  </section>
+
+  <section id="diagSheet" class="sheet" hidden>
+    <button class="backdrop" type="button" data-close="diagSheet" aria-label="閉じる"></button>
+    <div class="card">
+      <h1>Google SV Diagnostics</h1>
+      <p id="diagSummary">まだテストしていない。</p>
+      <pre id="diagLog" class="diag">[]</pre>
+      <div class="actions"><button id="copyDiag" type="button">診断をコピー</button><button id="clearDiag" class="secondary" type="button">クリア</button><button class="secondary" type="button" data-close="diagSheet">閉じる</button></div>
+    </div>
+  </section>
+
+  <script>
+  (()=>{
+    'use strict';
+    const API_KEY='streetview:google-maps-api-key';
+    const START={lat:35.01039,lng:135.75943,name:'烏丸御池'};
+    const DEST={lat:35.00367,lng:135.75937,name:'四条烏丸'};
+    const DEFAULT_INTERVAL_MS=700;
+    const DEFAULT_MAX_STEPS=25;
+    const HARD_MAX_STEPS=30;
+    const DESTINATION_STOP_METERS=45;
+    const INITIAL_SEARCH_RADIUS_METERS=100;
+    const PANO_LOAD_TIMEOUT_MS=12000;
+
+    const $=id=>document.getElementById(id);
+    const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+    let panorama=null,service=null,mapsPromise=null,running=false,stopRequested=false;
+    let diagnostics=[],loadSamples=[],successCount=0,stopReason='not_started';
+
+    function getKey(){try{return localStorage.getItem(API_KEY)||''}catch{return''}}
+    function setStatus(text){$('status').textContent=text}
+    function clamp(n,a,b){return Math.max(a,Math.min(b,n))}
+    function fmt(n,d=0){return Number.isFinite(n)?Number(n).toFixed(d):'—'}
+    function distanceMeters(a,b){
+      const r=Math.PI/180,p1=Number(a.lat)*r,p2=Number(b.lat)*r,dp=(Number(b.lat)-Number(a.lat))*r,dl=(Number(b.lng)-Number(a.lng))*r;
+      const s=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+      return 12742000*Math.atan2(Math.sqrt(s),Math.sqrt(Math.max(0,1-s)));
+    }
+    function bearing(a,b){
+      const r=Math.PI/180,p1=Number(a.lat)*r,p2=Number(b.lat)*r,dl=(Number(b.lng)-Number(a.lng))*r;
+      const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+      return (Math.atan2(y,x)*180/Math.PI+360)%360;
+    }
+    function headingDifference(a,b){return Math.abs(((Number(b)-Number(a)+540)%360)-180)}
+    function latLngLiteral(v){return v?{lat:v.lat(),lng:v.lng()}:null}
+    function averageLoad(){return loadSamples.length?loadSamples.reduce((a,b)=>a+b,0)/loadSamples.length:null}
+    function maxSteps(){return clamp(Math.round(Number($('stepsInput').value)||DEFAULT_MAX_STEPS),1,HARD_MAX_STEPS)}
+    function intervalMs(){return clamp(Math.round(Number($('intervalInput').value)||DEFAULT_INTERVAL_MS),200,5000)}
+
+    function renderStats(distance=null){
+      $('successStat').textContent=`${successCount} / ${maxSteps()}`;
+      $('loadStat').textContent=loadSamples.length?`${fmt(averageLoad())} ms`:'—';
+      $('distanceStat').textContent=Number.isFinite(distance)?`${fmt(distance)} m`:'—';
+      $('diagSummary').textContent=`success ${successCount}/${maxSteps()} / avg panoLoadMs ${fmt(averageLoad())} / stopReason ${stopReason}`;
+      $('diagLog').textContent=JSON.stringify(diagnostics,null,2);
+    }
+    function appendDiagnostic(row){diagnostics.push(row);renderStats(row.destinationDistanceMeters)}
+    function finish(reason){
+      running=false;stopRequested=false;stopReason=reason;
+      $('startButton').disabled=false;$('stopButton').disabled=true;
+      if(diagnostics.length)diagnostics[diagnostics.length-1].stopReason=reason;
+      renderStats(diagnostics.at(-1)?.destinationDistanceMeters);
+      setStatus(`終了: ${reason} / ${successCount} step / 平均 ${fmt(averageLoad())}ms`);
+    }
+
+    function loadGoogleMaps(){
+      if(window.google?.maps)return Promise.resolve(window.google.maps);
+      if(mapsPromise)return mapsPromise;
+      const key=getKey();
+      if(!key)return Promise.reject(new Error('Google Maps APIキーが未設定です'));
+      mapsPromise=new Promise((resolve,reject)=>{
+        const callback=`__googleSvInit_${Date.now()}`;
+        const script=document.createElement('script');
+        const timer=setTimeout(()=>reject(new Error('Google Maps JavaScript API load timeout')),15000);
+        window[callback]=()=>{clearTimeout(timer);delete window[callback];resolve(window.google.maps)};
+        script.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=${encodeURIComponent(callback)}`;
+        script.async=true;script.defer=true;
+        script.onerror=()=>{clearTimeout(timer);delete window[callback];mapsPromise=null;reject(new Error('Google Maps JavaScript APIを読み込めませんでした'))};
+        document.head.appendChild(script);
+      });
+      return mapsPromise;
+    }
+
+    async function ensureGoogle(){
+      const maps=await loadGoogleMaps();
+      if(!service)service=new maps.StreetViewService();
+      if(!panorama){
+        panorama=new maps.StreetViewPanorama($('pano'),{
+          visible:true,addressControl:false,fullscreenControl:false,linksControl:false,panControl:false,zoomControl:false,
+          enableCloseButton:false,clickToGo:false,scrollwheel:false,motionTracking:false,showRoadLabels:true,
+          pov:{heading:180,pitch:0},zoom:1
+        });
+      }
+      return maps;
+    }
+
+    function waitForPano(panoId){
+      const maps=window.google.maps,started=performance.now();
+      return new Promise((resolve,reject)=>{
+        let done=false;
+        const listeners=[];
+        const cleanup=()=>{for(const l of listeners)l?.remove?.();clearInterval(poll);clearTimeout(timeout)};
+        const settle=(fn,value)=>{if(done)return;done=true;cleanup();fn(value)};
+        const check=()=>{
+          if(done)return;
+          const same=panorama.getPano()===panoId;
+          const status=panorama.getStatus?.();
+          const position=panorama.getPosition?.();
+          const links=panorama.getLinks?.();
+          if(same&&status===maps.StreetViewStatus.ZERO_RESULTS)return settle(reject,new Error('Street View ZERO_RESULTS'));
+          if(same&&status===maps.StreetViewStatus.OK&&position&&Array.isArray(links)){
+            return settle(resolve,{panoId,position:latLngLiteral(position),links,panoLoadMs:performance.now()-started});
+          }
+        };
+        listeners.push(panorama.addListener('pano_changed',check));
+        listeners.push(panorama.addListener('links_changed',check));
+        listeners.push(panorama.addListener('position_changed',check));
+        listeners.push(panorama.addListener('status_changed',check));
+        const poll=setInterval(check,50);
+        const timeout=setTimeout(()=>settle(reject,new Error('pano_load_timeout')),PANO_LOAD_TIMEOUT_MS);
+        panorama.setPano(panoId);
+        check();
+      });
+    }
+
+    async function findStartPano(maps){
+      const request={
+        location:{lat:START.lat,lng:START.lng},radius:INITIAL_SEARCH_RADIUS_METERS,
+        preference:maps.StreetViewPreference.NEAREST,sources:[maps.StreetViewSource.GOOGLE]
+      };
+      const response=await service.getPanorama(request);
+      const data=response?.data;
+      const panoId=data?.location?.pano;
+      if(!panoId)throw new Error('開始地点付近にGoogle Street Viewが見つかりません');
+      return panoId;
+    }
+
+    function chooseLink(links,destinationBearing,visited){
+      const candidates=(links||[]).filter(link=>link?.pano&&!visited.has(String(link.pano))&&Number.isFinite(Number(link.heading))).map(link=>({
+        pano:String(link.pano),heading:Number(link.heading),description:link.description||'',difference:headingDifference(destinationBearing,Number(link.heading))
+      })).sort((a,b)=>a.difference-b.difference);
+      return candidates[0]||null;
+    }
+
+    async function runTest(){
+      if(running)return;
+      if(!getKey()){openSheet('settingsSheet');setStatus('APIキーを保存してください');return}
+      running=true;stopRequested=false;diagnostics=[];loadSamples=[];successCount=0;stopReason='running';
+      $('startButton').disabled=true;$('stopButton').disabled=false;renderStats();setStatus('Google Street Viewを初期化中…');
+      try{
+        const maps=await ensureGoogle();
+        const initialPanoId=await findStartPano(maps);
+        const initial=await waitForPano(initialPanoId);
+        const visited=new Set([String(initialPanoId)]);
+        let current={panoId:String(initialPanoId),position:initial.position,links:initial.links};
+        const initialDistance=distanceMeters(current.position,DEST);
+        const initialBearing=bearing(current.position,DEST);
+        const initialPhotographer=panorama.getPhotographerPov?.();
+        panorama.setPov({heading:initialBearing,pitch:Number.isFinite(Number(initialPhotographer?.pitch))?clamp(Number(initialPhotographer.pitch),-15,15):0});
+        appendDiagnostic({
+          step:0,currentPanoId:current.panoId,destinationDistanceMeters:Math.round(initialDistance*10)/10,destinationBearing:Math.round(initialBearing*10)/10,
+          selectedLinkHeading:null,selectedLinkDifference:null,photographerHeading:Number.isFinite(Number(initialPhotographer?.heading))?Math.round(Number(initialPhotographer.heading)*10)/10:null,
+          panoLoadMs:Math.round(initial.panoLoadMs),stopReason:null
+        });
+        setStatus(`開始地点読込 ${Math.round(initial.panoLoadMs)}ms / 目的地まで ${Math.round(initialDistance)}m`);
+
+        for(let step=1;step<=maxSteps();step++){
+          if(stopRequested){finish('stopped_by_user');return}
+          const dist=distanceMeters(current.position,DEST);
+          const destBearing=bearing(current.position,DEST);
+          renderStats(dist);
+          if(dist<=DESTINATION_STOP_METERS){finish('destination_reached');return}
+          const links=panorama.getLinks?.()||current.links||[];
+          const selected=chooseLink(links,destBearing,visited);
+          const photographer=panorama.getPhotographerPov?.();
+          const photographerHeading=Number.isFinite(Number(photographer?.heading))?Number(photographer.heading):null;
+          if(!selected){
+            appendDiagnostic({step,currentPanoId:current.panoId,destinationDistanceMeters:Math.round(dist*10)/10,destinationBearing:Math.round(destBearing*10)/10,selectedLinkHeading:null,selectedLinkDifference:null,photographerHeading:Number.isFinite(photographerHeading)?Math.round(photographerHeading*10)/10:null,panoLoadMs:null,stopReason:'no_unvisited_links'});
+            finish('no_unvisited_links');return;
+          }
+
+          panorama.setPov({heading:selected.heading,pitch:Number.isFinite(Number(photographer?.pitch))?clamp(Number(photographer.pitch),-15,15):0});
+          setStatus(`step ${step}: ${selected.heading.toFixed(1)}°へ移動中…`);
+          let loaded;
+          try{loaded=await waitForPano(selected.pano)}catch(error){
+            const reason=String(error?.message||error).includes('timeout')?'pano_load_timeout':`pano_load_error:${String(error?.message||error)}`;
+            appendDiagnostic({step,currentPanoId:current.panoId,destinationDistanceMeters:Math.round(dist*10)/10,destinationBearing:Math.round(destBearing*10)/10,selectedLinkHeading:Math.round(selected.heading*10)/10,selectedLinkDifference:Math.round(selected.difference*10)/10,photographerHeading:Number.isFinite(photographerHeading)?Math.round(photographerHeading*10)/10:null,panoLoadMs:null,stopReason:reason});
+            finish(reason);return;
+          }
+          visited.add(selected.pano);successCount++;loadSamples.push(loaded.panoLoadMs);
+          appendDiagnostic({
+            step,currentPanoId:current.panoId,nextPanoId:selected.pano,destinationDistanceMeters:Math.round(dist*10)/10,destinationBearing:Math.round(destBearing*10)/10,
+            selectedLinkHeading:Math.round(selected.heading*10)/10,selectedLinkDifference:Math.round(selected.difference*10)/10,
+            photographerHeading:Number.isFinite(photographerHeading)?Math.round(photographerHeading*10)/10:null,panoLoadMs:Math.round(loaded.panoLoadMs),stopReason:null
+          });
+          current={panoId:selected.pano,position:loaded.position,links:loaded.links};
+          const newDistance=distanceMeters(current.position,DEST);renderStats(newDistance);
+          setStatus(`step ${step}/${maxSteps()} 成功 / load ${Math.round(loaded.panoLoadMs)}ms / 残り ${Math.round(newDistance)}m`);
+          if(newDistance<=DESTINATION_STOP_METERS){finish('destination_reached');return}
+          if(step<maxSteps())await sleep(intervalMs());
+        }
+        finish(successCount>=maxSteps()?'max_steps_reached':'completed');
+      }catch(error){
+        console.error('[Google SV]',error);
+        finish(`error:${String(error?.message||error)}`);
+        if(String(error?.message||error).includes('API'))openSheet('settingsSheet');
+      }
+    }
+
+    function openSheet(id){$(id).hidden=false}
+    function closeSheet(id){$(id).hidden=true}
+    $('openSettings').addEventListener('click',()=>{$('apiKeyInput').value=getKey();openSheet('settingsSheet')});
+    $('openDiag').addEventListener('click',()=>{renderStats(diagnostics.at(-1)?.destinationDistanceMeters);openSheet('diagSheet')});
+    document.querySelectorAll('[data-close]').forEach(el=>el.addEventListener('click',()=>closeSheet(el.dataset.close)));
+    $('saveKey').addEventListener('click',()=>{
+      const value=$('apiKeyInput').value.trim();if(!value){setStatus('APIキーが空です');return}
+      try{localStorage.setItem(API_KEY,value)}catch{}
+      closeSheet('settingsSheet');setStatus('APIキーを保存した。テスト開始でGoogle SVだけを起動する。');
+    });
+    $('removeKey').addEventListener('click',()=>{try{localStorage.removeItem(API_KEY)}catch{}$('apiKeyInput').value='';mapsPromise=null;setStatus('APIキーを削除した')});
+    $('startButton').addEventListener('click',runTest);
+    $('stopButton').addEventListener('click',()=>{stopRequested=true;setStatus('現在のPanorama読込完了後に停止する…')});
+    $('stepsInput').addEventListener('change',()=>{const v=maxSteps();$('stepsInput').value=v;renderStats(diagnostics.at(-1)?.destinationDistanceMeters)});
+    $('intervalInput').addEventListener('change',()=>{$('intervalInput').value=intervalMs()});
+    $('copyDiag').addEventListener('click',async()=>{
+      const payload={test:'Google SV',route:{start:START,destination:DEST},settings:{intervalMs:intervalMs(),maxSteps:maxSteps(),destinationStopMeters:DESTINATION_STOP_METERS},summary:{averagePanoLoadMs:loadSamples.length?Math.round(averageLoad()):null,successfulSteps:successCount,stopReason},diagnostics};
+      const text=JSON.stringify(payload,null,2);try{await navigator.clipboard.writeText(text);$('copyDiag').textContent='コピー済み';setTimeout(()=>$('copyDiag').textContent='診断をコピー',1200)}catch{$('diagLog').textContent=text}
+    });
+    $('clearDiag').addEventListener('click',()=>{diagnostics=[];loadSamples=[];successCount=0;stopReason='cleared';renderStats()});
+    addEventListener('pagehide',()=>{stopRequested=true},{once:true});
+
+    $('intervalInput').value=DEFAULT_INTERVAL_MS;$('stepsInput').value=DEFAULT_MAX_STEPS;renderStats();
+    if(getKey())setStatus('APIキー保存済み。テスト開始でGoogle SVを起動する。');else openSheet('settingsSheet');
+  })();
+  </script>
+</body>
+</html>

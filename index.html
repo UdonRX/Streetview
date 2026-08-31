@@ -25,9 +25,9 @@
     </header>
     <section class="test-route-panel" aria-label="ジャンル別テストルート">
       <div class="test-route-card">
-        <div class="test-route-head"><b>ジャンル別テストルート</b><small>約200枚固定 / 小分け探索</small></div>
+        <div class="test-route-head"><b>ジャンル別テストルート</b><small>Mapillary 4種 + Google SV</small></div>
         <div id="testRouteButtons" class="test-route-buttons"></div>
-        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路をタップすると、API負荷を抑えて約200枚の固定区間を作る。</div>
+        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路は従来通りMapillary固定区間。Google SVは専用画面で完全分離して比較する。</div>
       </div>
     </section>
     <section class="provider-panel" aria-label="撮影データ表示設定">
@@ -63,6 +63,26 @@
   <script src="/map.js?v=0.3.1"></script>
   <script src="/phase4-route.js?v=0.4.10"></script>
   <script src="/kyoto-test-routes.js?v=0.2.0"></script>
+  <script>
+    (()=>{
+      const installGoogleSvButton=()=>{
+        const box=document.getElementById('testRouteButtons');
+        if(!box||box.querySelector('[data-route="google-sv"]'))return;
+        const button=document.createElement('button');
+        button.type='button';button.className='test-route-button';button.dataset.route='google-sv';
+        button.innerHTML='<strong>Google SV</strong><span>烏丸御池 → 四条烏丸</span><em>Google公式 / 25 step</em>';
+        button.addEventListener('click',()=>{location.href='/google-sv.html'});
+        box.appendChild(button);
+      };
+      installGoogleSvButton();
+      const box=document.getElementById('testRouteButtons');
+      if(box){
+        const observer=new MutationObserver(installGoogleSvButton);
+        observer.observe(box,{childList:true});
+        addEventListener('pagehide',()=>observer.disconnect(),{once:true});
+      }
+    })();
+  </script>
   <script>
     (()=>{
       const REV='quiet-sidewalk-yodogawa-hirakata-v1';
