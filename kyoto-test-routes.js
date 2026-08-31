@@ -5,7 +5,6 @@
   const ROUTE_KEY = 'streetview:journey-route';
   const TEST_KEY = 'streetview:kyoto-test-route';
   const TOKEN_KEY = 'streetview:mapillary-token';
-  /* Keep v3 so the already-resolved 200-frame sidewalk route remains usable. */
   const CACHE_KEY = 'streetview:kyoto-mapillary-fixed-routes:v3';
   const GRAPH = 'https://graph.mapillary.com';
   const SOURCE = 'kyoto-test-routes';
@@ -41,7 +40,6 @@
       start:{lat:35.00902,lng:135.77168,name:'三条大橋東岸'},
       end:{lat:35.00368,lng:135.77155,name:'四条大橋東岸'},
       maxEndpointM:900,
-      /* Confirmed by the successful 200/200 iPhone test on 2026-08-31. */
       seedSequenceId:'JPc0yiXf3nDrovBwm8gFHT',
       search:{stops:[0,.18,.36,.54,.72,.88,1],offsets:[0,18,-18,36,-36],cellRadius:12,limits:[8,5,3]}
     },
@@ -74,7 +72,8 @@
   }
   function saveCache(value) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(value)); } catch {} }
   function validFixed(fixed) {
-    return !!fixed?.sequenceId && Array.isArray(fixed.imageIds) && fixed.imageIds.length >= MIN_FRAMES && fixed.imageIds.length <= MAX_FRAMES;
+    const count = Array.isArray(fixed?.imageRefs) ? fixed.imageRefs.length : (Array.isArray(fixed?.imageIds) ? fixed.imageIds.length : 0);
+    return !!fixed?.sequenceId && count >= MIN_FRAMES && count <= MAX_FRAMES;
   }
 
   function distanceMeters(a, b) {
@@ -97,6 +96,14 @@
     const r = Math.PI / 180, p1 = route.start.lat*r, p2 = route.end.lat*r, dl = (route.end.lng-route.start.lng)*r;
     const y = Math.sin(dl)*Math.cos(p2), x = Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
     return (Math.atan2(y,x)*180/Math.PI+360)%360;
+  }
+  function routeProgress(route, point) {
+    if (!point) return 0;
+    const cos = Math.cos(((route.start.lat + route.end.lat) * .5) * Math.PI / 180);
+    const vx = (route.end.lng-route.start.lng)*cos, vy = route.end.lat-route.start.lat;
+    const px = (point.lng-route.start.lng)*cos, py = point.lat-route.start.lat;
+    const denom = vx*vx + vy*vy;
+    return denom > 0 ? (px*vx + py*vy)/denom : 0;
   }
   function offsetPoint(point, meters, bearingDeg) {
     if (!meters) return point;
@@ -192,6 +199,15 @@
     }
     return out;
   }
+  function sampleRefsExact(refs, target=TARGET_FRAMES) {
+    if (refs.length <= target) return refs.slice();
+    const out=[], used=new Set(), step=(refs.length-1)/(target-1);
+    for(let i=0;i<target;i++){
+      const ref=refs[Math.round(i*step)];
+      if(ref && !used.has(ref.id)){used.add(ref.id);out.push(ref)}
+    }
+    return out;
+  }
   function targetSegment(ids, startIndex, endIndex) {
     if (!Array.isArray(ids) || ids.length < MIN_FRAMES || startIndex < 0 || endIndex < 0) return null;
     const forward = endIndex >= startIndex;
@@ -258,8 +274,20 @@
     }
     return {rows:[],reduced:true,error:lastError};
   }
+  function effectiveSearchConfig(route) {
+    if (route.profile==='SIDEWALK' && route.quietRoute) {
+      return {
+        ...(route.search||{}),
+        stops:[0,.125,.25,.375,.5,.625,.75,.875,1],
+        offsets:[0,12,-12],
+        cellRadius:Math.max(12,Number(route.search?.cellRadius)||12),
+        limits:Array.isArray(route.search?.limits)&&route.search.limits.length ? route.search.limits : [6,3]
+      };
+    }
+    return route.search||{stops:[0,.25,.5,.75,1],offsets:[0],cellRadius:12,limits:[8,5,3]};
+  }
   async function collectSequenceHints(route) {
-    const cfg=route.search||{stops:[0,.25,.5,.75,1],offsets:[0],cellRadius:12,limits:[8,5,3]};
+    const cfg=effectiveSearchConfig(route);
     const perpendicular=(routeBearing(route)+90)%360,hints=new Map();
     let reducedCells=0,okCells=0;
     for(let si=0;si<cfg.stops.length;si++){
@@ -270,14 +298,115 @@
         if(result.reduced)reducedCells++;if(result.rows.length)okCells++;
         for(const row of result.rows){
           const seq=sequenceId(row);if(!seq)continue;
-          let hint=hints.get(seq);if(!hint)hints.set(seq,hint={sequenceId:seq,stops:new Set(),hits:0,offsetPenalty:0});
+          let hint=hints.get(seq);
+          if(!hint)hints.set(seq,hint={sequenceId:seq,stops:new Set(),hits:0,offsetPenalty:0,samples:[]});
           hint.stops.add(si);hint.hits++;hint.offsetPenalty+=Math.abs(offset);
+          hint.samples.push({stop:si,id:String(row.id),offset:Math.abs(offset)});
         }
-        await sleep(10);
+        await sleep(8);
       }
     }
-    const candidates=[...hints.values()].map(h=>({...h,coverage:h.stops.size,score:h.stops.size*100+h.hits*5-h.offsetPenalty*.08})).sort((a,b)=>b.score-a.score);
-    return {candidates,reducedCells,okCells};
+    const candidates=[...hints.values()].map(h=>{
+      const stopList=[...h.stops].sort((a,b)=>a-b);
+      return {...h,stopList,minStop:stopList[0]??0,maxStop:stopList[stopList.length-1]??0,coverage:stopList.length,score:stopList.length*100+h.hits*5-h.offsetPenalty*.08};
+    }).sort((a,b)=>b.score-a.score);
+    return {candidates,reducedCells,okCells,stopCount:cfg.stops.length};
+  }
+
+  async function sidewalkChunkFromHint(route, candidate) {
+    const ids=await orderedIds(candidate.sequenceId);
+    if(ids.length<12)return null;
+    const indexById=new Map(ids.map((id,i)=>[String(id),i]));
+    const samples=(candidate.samples||[]).map(s=>({...s,index:indexById.get(String(s.id))})).filter(s=>Number.isInteger(s.index));
+    if(!samples.length)return null;
+    samples.sort((a,b)=>a.stop-b.stop || a.offset-b.offset);
+    let lo=Math.min(...samples.map(s=>s.index)), hi=Math.max(...samples.map(s=>s.index));
+    const desired=Math.min(ids.length,Math.max(70,Math.min(140,50+candidate.coverage*30)));
+    while(hi-lo+1<desired && (lo>0||hi<ids.length-1)){
+      if(lo>0)lo--;
+      if(hi-lo+1<desired&&hi<ids.length-1)hi++;
+    }
+    let forward=true;
+    const distinct=[];
+    for(const sample of samples){if(!distinct.length||distinct[distinct.length-1].stop!==sample.stop)distinct.push(sample)}
+    if(distinct.length>=2){forward=distinct[distinct.length-1].index>=distinct[0].index}
+    else {
+      const a=Math.max(0,lo),b=Math.min(ids.length-1,hi);
+      const probe=await batchMeta([ids[a],ids[b]],'id,computed_geometry',2);
+      const pa=routeProgress(route,coords(probe.get(ids[a]))),pb=routeProgress(route,coords(probe.get(ids[b])));
+      if(Number.isFinite(pa)&&Number.isFinite(pb)&&Math.abs(pb-pa)>.002)forward=pb>=pa;
+    }
+    let chunk=ids.slice(lo,hi+1).map((id,i)=>({id:String(id),sequenceId:String(candidate.sequenceId),sourceSequenceIndex:lo+i}));
+    if(!forward)chunk.reverse();
+    return {sequenceId:candidate.sequenceId,refs:chunk,minStop:candidate.minStop,maxStop:candidate.maxStop,coverage:candidate.coverage,score:candidate.score,stopList:candidate.stopList};
+  }
+
+  async function stitchSidewalkRoute(route, discovery) {
+    if(route.profile!=='SIDEWALK'||!discovery?.candidates?.length)return null;
+    status('歩道：単一sequence不足。近接sequenceを連結して約200枚を作成中…');
+    const sourceCandidates=discovery.candidates.filter(c=>c.coverage>=1).slice(0,10);
+    const chunks=[];
+    for(let i=0;i<sourceCandidates.length;i++){
+      try{
+        const chunk=await sidewalkChunkFromHint(route,sourceCandidates[i]);
+        if(chunk)chunks.push(chunk);
+      }catch(error){
+        if(!error?.reduceAmount)console.warn('[KyotoTestRoutes] sidewalk stitch candidate failed',error);
+      }
+      if(chunks.length>=6)break;
+    }
+    if(!chunks.length)return null;
+
+    const chosen=[];
+    const chosenSeq=new Set();
+    const add=chunk=>{if(chunk&&!chosenSeq.has(chunk.sequenceId)){chosen.push(chunk);chosenSeq.add(chunk.sequenceId)}};
+    const startChunk=chunks.filter(c=>c.minStop<=1).sort((a,b)=>b.score-a.score)[0];
+    const endThreshold=Math.max(0,(discovery.stopCount||5)-2);
+    const endChunk=chunks.filter(c=>c.maxStop>=endThreshold).sort((a,b)=>b.score-a.score)[0];
+    add(startChunk);add(endChunk);
+
+    const covered=new Set(chosen.flatMap(c=>c.stopList||[]));
+    let estimated=chosen.reduce((sum,c)=>sum+c.refs.length,0);
+    while((estimated<TARGET_FRAMES||covered.size<Math.min(5,discovery.stopCount||5))&&chosen.length<4){
+      const next=chunks.filter(c=>!chosenSeq.has(c.sequenceId)).sort((a,b)=>{
+        const newA=(a.stopList||[]).filter(x=>!covered.has(x)).length;
+        const newB=(b.stopList||[]).filter(x=>!covered.has(x)).length;
+        return (newB-newA)*1000+(b.coverage-a.coverage)*100+(b.score-a.score);
+      })[0];
+      if(!next)break;
+      add(next);for(const s of next.stopList||[])covered.add(s);estimated+=next.refs.length;
+    }
+    if(!chosen.length)add(chunks[0]);
+    chosen.sort((a,b)=>((a.minStop+a.maxStop)/2)-((b.minStop+b.maxStop)/2));
+
+    let refs=[],seen=new Set();
+    for(const chunk of chosen){
+      for(const ref of chunk.refs){if(!seen.has(ref.id)){seen.add(ref.id);refs.push(ref)}}
+    }
+    if(refs.length<MIN_FRAMES){
+      const extras=chunks.filter(c=>!chosenSeq.has(c.sequenceId)).sort((a,b)=>b.score-a.score);
+      for(const chunk of extras){
+        for(const ref of chunk.refs){if(!seen.has(ref.id)){seen.add(ref.id);refs.push(ref)}}
+        chosenSeq.add(chunk.sequenceId);
+        if(refs.length>=MIN_FRAMES)break;
+      }
+    }
+    if(refs.length<MIN_FRAMES)return null;
+    if(refs.length>TARGET_FRAMES)refs=sampleRefsExact(refs,TARGET_FRAMES);
+    if(refs.length<MIN_FRAMES)return null;
+
+    const edgeMeta=await batchMeta([refs[0].id,refs[refs.length-1].id],'id,computed_geometry',2);
+    const firstCoord=coords(edgeMeta.get(refs[0].id)),lastCoord=coords(edgeMeta.get(refs[refs.length-1].id));
+    return {
+      sequenceId:refs[0].sequenceId,
+      sequenceIds:[...new Set(refs.map(r=>r.sequenceId))],
+      startImageId:refs[0].id,endImageId:refs[refs.length-1].id,
+      anchorStartImageId:refs[0].id,anchorEndImageId:refs[refs.length-1].id,
+      imageIds:refs.map(r=>r.id),imageRefs:refs,
+      startDistanceMeters:firstCoord?distanceMeters(route.start,firstCoord):null,
+      endDistanceMeters:lastCoord?distanceMeters(route.end,lastCoord):null,
+      source:'sidewalk-multi-sequence-stitch'
+    };
   }
 
   async function resolveRoute(route) {
@@ -289,46 +418,68 @@
       let fixed=await resolveSeed(route),discovery=null;
       if(!fixed){
         discovery=await collectSequenceHints(route);
-        const candidates=discovery.candidates.filter(c=>c.coverage>=2).slice(0,12);
+        const minCoverage=route.profile==='SIDEWALK'?1:2;
+        const maxCandidates=route.profile==='SIDEWALK'?10:12;
+        const candidates=discovery.candidates.filter(c=>c.coverage>=minCoverage).slice(0,maxCandidates);
         let fallback=null;
         for(let i=0;i<candidates.length;i++){
           const candidate=candidates[i];status(`${route.label}：候補sequence精査 ${i+1}/${candidates.length}…`);
           let value=null;
           try{value=await fixedFromSequence(route,candidate.sequenceId,`tiny-corridor-${candidate.coverage}stops`)}catch(error){if(!error?.reduceAmount)console.warn('[KyotoTestRoutes] candidate failed',error)}
           if(!value)continue;
-          const endpoint=Math.max(value.startDistanceMeters,value.endDistanceMeters),rank=endpoint-candidate.coverage*70;
+          const endpoint=Math.max(Number(value.startDistanceMeters)||0,Number(value.endDistanceMeters)||0),rank=endpoint-candidate.coverage*70;
           if(!fallback||rank<fallback.rank)fallback={rank,value};
           if(endpoint<=route.maxEndpointM){fixed=value;break}
         }
         if(!fixed&&fallback)fixed=fallback.value;
+        if(!fixed&&route.profile==='SIDEWALK')fixed=await stitchSidewalkRoute(route,discovery);
       }
       if(!fixed){
         const suffix=discovery?.reducedCells?`（密集セル${discovery.reducedCells}件は自動縮小/スキップ済み）`:'';
-        throw new Error(`${route.label}で約200枚続くsequenceを見つけられませんでした${suffix}`);
+        throw new Error(route.profile==='SIDEWALK'?`歩道で約200枚を構成できませんでした${suffix}`:`${route.label}で約200枚続くsequenceを見つけられませんでした${suffix}`);
       }
-      fixed={...fixed,routeId:route.id,label:route.label,journeyProfile:route.profile,targetFrames:TARGET_FRAMES,resolvedAt:new Date().toISOString(),discovery:{method:route.seedSequenceId?'confirmed-seed':'tiny-sequence-probe',reducedCells:discovery?.reducedCells||0,okCells:discovery?.okCells||0}};
+      fixed={
+        ...fixed,routeId:route.id,label:route.label,journeyProfile:route.profile,targetFrames:TARGET_FRAMES,
+        resolvedAt:new Date().toISOString(),
+        discovery:{method:fixed.source||'tiny-sequence-probe',reducedCells:discovery?.reducedCells||0,okCells:discovery?.okCells||0,sequenceCount:fixed.sequenceIds?.length||1}
+      };
       const next=loadCache();next[route.id]=fixed;saveCache(next);return fixed;
     })().finally(()=>resolving.delete(route.id));
     resolving.set(route.id,task);return task;
   }
 
   async function buildPayload(route,fixed) {
-    const ids=fixed.imageIds,initialIds=ids.slice(0,Math.min(INITIAL_FRAMES,ids.length));
-    const meta=await batchMeta(initialIds);
-    const frames=initialIds.map((id,i)=>normalizeFrame(meta.get(id),fixed.sequenceId,i,route.profile)).filter(Boolean);
+    const ids=fixed.imageIds;
+    const refs=Array.isArray(fixed.imageRefs)&&fixed.imageRefs.length===ids.length
+      ? fixed.imageRefs.map((ref,i)=>({id:String(ref.id),sequenceId:String(ref.sequenceId||fixed.sequenceId),sequenceIndex:i,journeyProfile:route.profile}))
+      : ids.map((id,i)=>({id:String(id),sequenceId:String(fixed.sequenceId),sequenceIndex:i,journeyProfile:route.profile}));
+    const initialRefs=refs.slice(0,Math.min(INITIAL_FRAMES,refs.length));
+    const meta=await batchMeta(initialRefs.map(ref=>ref.id));
+    const frames=initialRefs.map((ref,i)=>normalizeFrame(meta.get(ref.id),ref.sequenceId,i,route.profile)).filter(Boolean);
     if(frames.length<2)throw new Error('固定ルートの初期画像URLを取得できませんでした');
     const loaded=new Set(frames.map(f=>String(f.id)));
-    const missing=initialIds.map((id,i)=>({id:String(id),sequenceId:String(fixed.sequenceId),sequenceIndex:i,journeyProfile:route.profile})).filter(ref=>!loaded.has(ref.id));
-    const remaining=ids.slice(initialIds.length).map((id,i)=>({id:String(id),sequenceId:String(fixed.sequenceId),sequenceIndex:initialIds.length+i,journeyProfile:route.profile}));
+    const missing=initialRefs.filter(ref=>!loaded.has(ref.id));
+    const remaining=refs.slice(initialRefs.length);
     const sidewalk=route.profile==='SIDEWALK';
+    const stitched=Array.isArray(fixed.sequenceIds)&&fixed.sequenceIds.length>1;
     return {
-      version:'0.4.14-profiled-fixed-200',source:'Mapillary',provider:'Mapillary',sequenceId:fixed.sequenceId,
+      version:'0.4.15-profiled-fixed-200-stitch',source:'Mapillary',provider:'Mapillary',sequenceId:fixed.sequenceId,
+      sequenceIds:fixed.sequenceIds||[fixed.sequenceId],
       journeyProfile:route.profile,profileSource:'explicit-test-route',profileIsolation:true,
       presentationProfile:sidewalk?{photoCenterX:50,preferredImageTier:'1024',bootstrapFrames:8,prefetchAhead:30}:null,
       destination:{...route.end,testRouteType:route.id,testRouteLabel:route.label,journeyProfile:route.profile},
-      selection:{strategy:route.seedSequenceId?'fixed-confirmed-sequence-200':'fixed-test-sequence-200-low-data',direction:'forward',proximityMeters:fixed.startDistanceMeters,destinationDistanceMeters:fixed.endDistanceMeters,searchMode:fixed.source||'fixed-resolved',candidateCount:1,visualOverride:false,startImageId:fixed.startImageId,endImageId:fixed.endImageId,totalImageIds:ids.length,journeyProfile:route.profile},
+      selection:{
+        strategy:stitched?'fixed-sidewalk-multi-sequence-200':(route.seedSequenceId?'fixed-confirmed-sequence-200':'fixed-test-sequence-200-low-data'),
+        direction:'forward',proximityMeters:fixed.startDistanceMeters,destinationDistanceMeters:fixed.endDistanceMeters,
+        searchMode:fixed.source||'fixed-resolved',candidateCount:fixed.sequenceIds?.length||1,visualOverride:false,
+        startImageId:fixed.startImageId,endImageId:fixed.endImageId,totalImageIds:ids.length,journeyProfile:route.profile
+      },
       frames,streamPending:[...missing,...remaining],candidateRoutes:[],
-      fixedTestRoute:{routeId:route.id,label:route.label,name:route.name,journeyProfile:route.profile,startImageId:fixed.startImageId,endImageId:fixed.endImageId,anchorStartImageId:fixed.anchorStartImageId||null,anchorEndImageId:fixed.anchorEndImageId||null,frameCount:ids.length,targetFrames:TARGET_FRAMES,resolvedAt:fixed.resolvedAt,discovery:fixed.discovery||null}
+      fixedTestRoute:{
+        routeId:route.id,label:route.label,name:route.name,journeyProfile:route.profile,startImageId:fixed.startImageId,endImageId:fixed.endImageId,
+        anchorStartImageId:fixed.anchorStartImageId||null,anchorEndImageId:fixed.anchorEndImageId||null,frameCount:ids.length,targetFrames:TARGET_FRAMES,
+        sequenceIds:fixed.sequenceIds||[fixed.sequenceId],resolvedAt:fixed.resolvedAt,discovery:fixed.discovery||null
+      }
     };
   }
 
@@ -339,7 +490,7 @@
     badge.textContent=state==='ready'?`約${count||TARGET_FRAMES}枚固定`:state==='loading'?'準備中':state==='error'?'再試行':'タップで固定';
   }
   function setSessionPreset(route,fixed){
-    const preset={id:route.id,label:route.label,name:route.name,journeyProfile:route.profile,start:{...route.start},end:{...route.end},sequenceId:fixed?.sequenceId||null,startImageId:fixed?.startImageId||null,endImageId:fixed?.endImageId||null,frameCount:fixed?.imageIds?.length||null,registeredAt:'2026-08-31'};
+    const preset={id:route.id,label:route.label,name:route.name,journeyProfile:route.profile,start:{...route.start},end:{...route.end},sequenceId:fixed?.sequenceId||null,sequenceIds:fixed?.sequenceIds||null,startImageId:fixed?.startImageId||null,endImageId:fixed?.endImageId||null,frameCount:fixed?.imageIds?.length||null,registeredAt:'2026-08-31'};
     try{
       sessionStorage.setItem(TEST_KEY,JSON.stringify(preset));
       sessionStorage.setItem(DEST_KEY,JSON.stringify({lat:route.end.lat,lng:route.end.lng,name:route.end.name,testRouteType:route.id,testRouteLabel:route.label,journeyProfile:route.profile,startLat:route.start.lat,startLng:route.start.lng,startName:route.start.name}));
@@ -354,7 +505,8 @@
       const fixed=await prepare(route);setSessionPreset(route,fixed);
       prepared.set(route.id,buildPayload(route,fixed));
       const payload=await prepared.get(route.id);sessionStorage.setItem(ROUTE_KEY,JSON.stringify(payload));
-      status(`${route.label}：Sequence ${fixed.sequenceId} / ${fixed.imageIds.length}枚固定。${route.profile}専用処理で開始`);
+      const sequenceLabel=fixed.sequenceIds?.length>1?`${fixed.sequenceIds.length} sequences`:`Sequence ${fixed.sequenceId}`;
+      status(`${route.label}：${sequenceLabel} / ${fixed.imageIds.length}枚固定。${route.profile}専用処理で開始`);
       location.href='/journey-map.html?autostart=1';
     }catch(error){prepared.delete(route.id);markButton(route.id,'error');status(`${route.label}：${error?.message||'固定ルート準備に失敗'}`)}
   }
@@ -381,7 +533,8 @@
     for(const route of routes){
       const fixed=cache[route.id],button=document.createElement('button');
       button.type='button';button.className='test-route-button';button.dataset.route=route.id;
-      button.innerHTML=`<strong>${route.label}</strong><span>${route.start.name} → ${route.end.name}</span><em>${validFixed(fixed)?`約${fixed.imageIds.length}枚固定`:'タップで固定'}</em>`;
+      const fixedCount=Array.isArray(fixed?.imageRefs)?fixed.imageRefs.length:fixed?.imageIds?.length;
+      button.innerHTML=`<strong>${route.label}</strong><span>${route.start.name} → ${route.end.name}</span><em>${validFixed(fixed)?`約${fixedCount}枚固定`:'タップで固定'}</em>`;
       button.addEventListener('click',()=>startRoute(route,button));box.appendChild(button);
     }
   }
