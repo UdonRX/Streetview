@@ -63,6 +63,67 @@
   <script src="/map.js?v=0.3.1"></script>
   <script src="/phase4-route.js?v=0.4.10"></script>
   <script src="/kyoto-test-routes.js?v=0.2.0"></script>
+  <script>
+    (()=>{
+      const REV='quiet-sidewalk-shichijo-kujo-v1';
+      const REV_KEY='streetview:quiet-sidewalk-route-revision';
+      const CACHE_KEY='streetview:kyoto-mapillary-fixed-routes:v3';
+      const SOURCE='kyoto-test-routes';
+      const QUIET={
+        name:'鴨川遊歩道（七条〜九条）',
+        start:{lat:34.98935,lng:135.76750,name:'七条大橋東岸'},
+        end:{lat:34.98039,lng:135.76780,name:'九条跨線橋東岸'},
+        maxEndpointM:650,
+        seedSequenceId:null,
+        search:{stops:[0,.25,.5,.75,1],offsets:[0,18,-18],cellRadius:12,limits:[6,3]},
+        quietRoute:true,
+        routeRevision:REV
+      };
+      function geojson(routes){
+        const features=[];
+        for(const route of routes){
+          features.push({type:'Feature',properties:{id:route.id,label:route.label,name:route.name,kind:'line'},geometry:{type:'LineString',coordinates:[[route.start.lng,route.start.lat],[route.end.lng,route.end.lat]]}});
+          features.push({type:'Feature',properties:{id:route.id,label:`${route.label} 出発`,kind:'point'},geometry:{type:'Point',coordinates:[route.start.lng,route.start.lat]}});
+          features.push({type:'Feature',properties:{id:route.id,label:`${route.label} 到着`,kind:'point'},geometry:{type:'Point',coordinates:[route.end.lng,route.end.lat]}});
+        }
+        return {type:'FeatureCollection',features};
+      }
+      function refreshMap(routes,attempt=0){
+        const map=window.__streetviewCoverageMap,source=map?.getSource?.(SOURCE);
+        if(source?.setData){source.setData(geojson(routes));return}
+        if(attempt<30)setTimeout(()=>refreshMap(routes,attempt+1),120);
+      }
+      function apply(){
+        const api=window.__kyotoJourneyTestRoutes;
+        if(!api?.routes)return setTimeout(apply,30);
+        const route=api.routes.find(x=>x.id==='sidewalk');
+        if(!route)return;
+        try{
+          if(localStorage.getItem(REV_KEY)!==REV){
+            const cache=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');
+            if(cache&&typeof cache==='object'){
+              delete cache.sidewalk;
+              localStorage.setItem(CACHE_KEY,JSON.stringify(cache));
+            }
+            localStorage.setItem(REV_KEY,REV);
+          }
+        }catch{}
+        Object.assign(route,QUIET);
+        route.start={...QUIET.start};route.end={...QUIET.end};route.search={...QUIET.search};
+        const button=document.querySelector('[data-route="sidewalk"]');
+        if(button){
+          const span=button.querySelector('span'),badge=button.querySelector('em');
+          if(span)span.textContent=`${QUIET.start.name} → ${QUIET.end.name}`;
+          if(badge)badge.textContent='タップで固定';
+          button.dataset.fixedState='idle';
+        }
+        const status=document.getElementById('testRouteStatus');
+        if(status)status.textContent='歩道テストは人の少ない鴨川・七条〜九条区間。初回だけ軽量探索し、以後は約200枚を固定する。';
+        refreshMap(api.routes);
+      }
+      apply();
+    })();
+  </script>
   <script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js?v=0.1.49').catch(()=>{}));</script>
 </body>
 </html>
