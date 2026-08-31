@@ -25,9 +25,9 @@
     </header>
     <section class="test-route-panel" aria-label="ジャンル別テストルート">
       <div class="test-route-card">
-        <div class="test-route-head"><b>ジャンル別テストルート</b><small>Mapillary 4種 + Google SV</small></div>
+        <div class="test-route-head"><b>ジャンル別テストルート</b><small>Mapillary 4種 + MapillaryJS</small></div>
         <div id="testRouteButtons" class="test-route-buttons"></div>
-        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路は従来通りMapillary固定区間。Google SVは専用画面で完全分離して比較する。</div>
+        <div id="testRouteStatus" class="test-route-status">道路・歩道・山道・線路は従来通り。MapillaryJSは公式Viewerだけを使う専用比較テスト。</div>
       </div>
     </section>
     <section class="provider-panel" aria-label="撮影データ表示設定">
@@ -65,19 +65,19 @@
   <script src="/kyoto-test-routes.js?v=0.2.0"></script>
   <script>
     (()=>{
-      const installGoogleSvButton=()=>{
+      const installMapillaryJsButton=()=>{
         const box=document.getElementById('testRouteButtons');
-        if(!box||box.querySelector('[data-route="google-sv"]'))return;
+        if(!box||box.querySelector('[data-route="mapillaryjs"]'))return;
         const button=document.createElement('button');
-        button.type='button';button.className='test-route-button';button.dataset.route='google-sv';
-        button.innerHTML='<strong>Google SV</strong><span>烏丸御池 → 四条烏丸</span><em>Google公式 / 25 step</em>';
-        button.addEventListener('click',()=>{location.href='/google-sv.html'});
+        button.type='button';button.className='test-route-button';button.dataset.route='mapillaryjs';
+        button.innerHTML='<strong>MapillaryJS</strong><span>烏丸御池 → 四条烏丸</span><em>公式Viewer / 50 step</em>';
+        button.addEventListener('click',()=>{location.href='/mapillaryjs.html'});
         box.appendChild(button);
       };
-      installGoogleSvButton();
+      installMapillaryJsButton();
       const box=document.getElementById('testRouteButtons');
       if(box){
-        const observer=new MutationObserver(installGoogleSvButton);
+        const observer=new MutationObserver(installMapillaryJsButton);
         observer.observe(box,{childList:true});
         addEventListener('pagehide',()=>observer.disconnect(),{once:true});
       }
