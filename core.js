@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='mapillaryjs-v11-transition-route-poi';
+const VERSION='mapillaryjs-v12-forward-motion-reset';
 const TOKEN_KEY='streetview:mapillary-token';
 const ROUTE_CACHE_KEY='streetview:mapillary-route-cache-v6';
 const GRAPH='https://graph.mapillary.com';
