@@ -3,16 +3,21 @@ function closeSearch(){$('searchPanel').hidden=true;$('searchResults').hidden=tr
 async function handleSearch(){const q=$('mapSearch').value.trim();if(!q)return;$('searchResults').hidden=false;$('searchResults').innerHTML='<button disabled>検索中…</button>';try{const rows=await searchLocation(q);if(!rows?.length)throw new Error('見つかりませんでした');$('searchResults').innerHTML=rows.map((r,i)=>`<button type="button" data-i="${i}"><b>${escapeHtml(r.name.split(',')[0])}</b><small>${escapeHtml(r.name)}</small></button>`).join('');$('searchResults').querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{const r=rows[+btn.dataset.i];closeSearch();state.map.flyTo({center:[r.lng,r.lat],zoom:14});chooseDestination({name:r.name.split(',')[0],type:'attraction',lat:r.lat,lng:r.lng})}))}catch(e){$('searchResults').innerHTML=`<button disabled>${escapeHtml(e?.message||e)}</button>`}}
 function retryStartSelection(){state.stage='start';$('routeSearchCard').hidden=true;$('routeSearchRetry').hidden=true;syncPlannerUI();plannerStatus('出発地点を選ぶ','地図を少し動かして再度「出発地登録」')}
 
-const WARP_PLAYBACK_VERSION='mapillaryjs-v16-forward-warp-audit';
+const WARP_PLAYBACK_VERSION='mapillaryjs-v17-forward-warp-zoom-lock';
 const WARP_PUSH_MS=360;
 const WARP_RELEASE_MS=120;
 const WARP_MIN_ZOOM=0.30;
 const WARP_MAX_ZOOM=0.50;
-const WARP_TRACE_LIMIT=240;
+const WARP_SWITCH_GUARD_INTERVAL_MS=34;
+const WARP_SWITCH_ZOOM_TOLERANCE=0.018;
+const WARP_SWITCH_SEVERE_DROP=0.06;
+const WARP_TRACE_LIMIT=300;
 let warpTransitionSeq=0;
 let warpFxMoves=0;
 let warpUnexpectedEffectCount=0;
+let warpSuppressedEffectCount=0;
 let warpTrace=[];
+let warpSwitchTimes=[];
 let lastWarpAudit=null;
 let warpActive=false;
 
@@ -58,6 +63,10 @@ function recordUnexpectedWarp(audit,code,details={}){
   if(!audit.unexpectedEffects.includes(code)){audit.unexpectedEffects.push(code);warpUnexpectedEffectCount++}
   warpLog('unexpected-effect',{code,...details})
 }
+function recordSuppressedWarp(audit,code,details={}){
+  if(!audit.suppressedEffects.includes(code)){audit.suppressedEffects.push(code);warpSuppressedEffectCount++}
+  warpLog('suppressed-effect',{code,...details})
+}
 async function currentViewerZoom(){try{const z=await state.viewer?.getZoom?.();return Number.isFinite(z)?z:null}catch{return null}}
 function forwardWarpZoomAmount(stepDistanceM){
   const d=Number.isFinite(stepDistanceM)?stepDistanceM:20;
@@ -80,6 +89,38 @@ function animateForwardWarpZoom(from,to,duration,token,audit){
     requestAnimationFrame(tick)
   })
 }
+function startSwitchZoomGuard(pushZoom,token,audit){
+  let active=true,timer=null,samples=0,corrections=0,minObserved=pushZoom,maxObservedDrop=0;
+  const started=performance.now();
+  const loop=async()=>{
+    if(!active||token!==cameraMotionToken||!state.viewer||state.pointerActive)return;
+    const observed=await currentViewerZoom();
+    if(Number.isFinite(observed)){
+      samples++;
+      minObserved=Math.min(minObserved,observed);
+      const drop=Math.max(0,pushZoom-observed);
+      maxObservedDrop=Math.max(maxObservedDrop,drop);
+      if(drop>WARP_SWITCH_ZOOM_TOLERANCE)corrections++;
+    }
+    try{state.viewer.setZoom(pushZoom)}catch{}
+    setForwardWarpIntensity(1);
+    if(active)timer=setTimeout(loop,WARP_SWITCH_GUARD_INTERVAL_MS)
+  };
+  loop();
+  return {stop:async()=>{
+    active=false;if(timer)clearTimeout(timer);
+    const observed=await currentViewerZoom();
+    if(Number.isFinite(observed)){
+      samples++;minObserved=Math.min(minObserved,observed);maxObservedDrop=Math.max(maxObservedDrop,Math.max(0,pushZoom-observed))
+    }
+    try{state.viewer?.setZoom?.(pushZoom)}catch{}
+    const finalZoom=await currentViewerZoom();
+    const metrics={durationMs:Math.round(performance.now()-started),samples,corrections,minObserved,maxObservedDrop,finalZoom,guardIntervalMs:WARP_SWITCH_GUARD_INTERVAL_MS,tolerance:WARP_SWITCH_ZOOM_TOLERANCE};
+    if(maxObservedDrop>WARP_SWITCH_ZOOM_TOLERANCE)recordSuppressedWarp(audit,'mapillary-switch-zoom-drop-suppressed',{maxObservedDrop,minObserved,pushZoom,corrections});
+    if(Number.isFinite(finalZoom)&&pushZoom-finalZoom>WARP_SWITCH_SEVERE_DROP)recordUnexpectedWarp(audit,'switch-zoom-lock-failed',{pushZoom,finalZoom,maxObservedDrop});
+    return metrics
+  }}
+}
 function releaseForwardWarp(duration,token){
   return new Promise(resolve=>{
     const started=performance.now();
@@ -95,7 +136,7 @@ function releaseForwardWarp(duration,token){
 
 const initializeViewerBeforeWarpAudit=initializeViewer;
 initializeViewer=async function(){
-  warpTransitionSeq=0;warpFxMoves=0;warpUnexpectedEffectCount=0;warpTrace=[];lastWarpAudit=null;clearForwardWarp();
+  warpTransitionSeq=0;warpFxMoves=0;warpUnexpectedEffectCount=0;warpSuppressedEffectCount=0;warpTrace=[];warpSwitchTimes=[];lastWarpAudit=null;clearForwardWarp();
   return initializeViewerBeforeWarpAudit.apply(this,arguments)
 };
 
@@ -131,17 +172,20 @@ moveToExclusiveCustom=async function(target,maxAttempts=3){
     pushMs:WARP_PUSH_MS,blurReleaseMs:WARP_RELEASE_MS,
     mapillaryTransition:'Instantaneous',visibleZoomOutAnimation:false,
     cameraReset:'instant-under-maximum-warp',imageEventObserved:false,
-    zoomOutAnimationCalls:0,unexpectedEffects:[],status:'running'
+    imageSwitchMs:null,switchZoomGuard:null,
+    zoomOutAnimationCalls:0,suppressedEffects:[],unexpectedEffects:[],status:'running'
   };
   lastWarpAudit=audit;
-  lastMoveMode='Instantaneous + forward warp only';
+  lastMoveMode='Instantaneous + forward warp + switch zoom lock';
   customTimelineMoves++;
   setTransition(M.TransitionMode.Instantaneous);
   warpLog('transition-start',{targetId:String(target.id),baseZoom,pushZoom,transitionMode:'Instantaneous'});
+  let zoomGuard=null;
   try{
     warpLog('forward-push-start',{durationMs:WARP_PUSH_MS,zoomFrom:baseZoom,zoomTo:pushZoom,radialLikeBlur:true});
     await animateForwardWarpZoom(baseZoom,pushZoom,WARP_PUSH_MS,tokenId,audit);
     if(tokenId!==cameraMotionToken||!state.viewer)throw new Error('custom-motion-cancelled');
+    try{state.viewer.setZoom(pushZoom)}catch{}
     warpLog('forward-push-end',{zoom:await currentViewerZoom(),warpIntensity:1});
     if(state.pointerActive){
       clearForwardWarp();try{state.viewer.setZoom(baseZoom)}catch{}
@@ -150,21 +194,29 @@ moveToExclusiveCustom=async function(target,maxAttempts=3){
       return moveToNativeDefault(target,maxAttempts)
     }
 
+    const switchStarted=performance.now();
     const visiblePromise=waitForImageEvent(target.id);
-    warpLog('image-switch-start',{targetId:String(target.id),warpIntensity:1,transitionMode:'Instantaneous'});
+    zoomGuard=startSwitchZoomGuard(pushZoom,tokenId,audit);
+    warpLog('image-switch-start',{targetId:String(target.id),warpIntensity:1,transitionMode:'Instantaneous',zoomLock:true,zoomLockTarget:pushZoom});
     let image=await moveToWithRetry(target.id,maxAttempts);
     const visibleImage=await visiblePromise;
     if(visibleImage){image=visibleImage;audit.imageEventObserved=true}
     else recordUnexpectedWarp(audit,'target-image-event-timeout',{targetId:String(target.id)});
-    warpLog('image-switch-end',{targetId:String(target.id),imageEventObserved:audit.imageEventObserved,zoomBeforeReset:await currentViewerZoom()});
+    audit.imageSwitchMs=Math.round(performance.now()-switchStarted);
+    warpSwitchTimes.push(audit.imageSwitchMs);
+    audit.switchZoomGuard=await zoomGuard.stop();zoomGuard=null;
+    const zoomBeforeReset=await currentViewerZoom();
+    warpLog('image-switch-end',{targetId:String(target.id),imageEventObserved:audit.imageEventObserved,imageSwitchMs:audit.imageSwitchMs,zoomBeforeReset,pushZoom,zoomGuard:audit.switchZoomGuard});
+    if(Number.isFinite(zoomBeforeReset)&&pushZoom-zoomBeforeReset>WARP_SWITCH_SEVERE_DROP)recordUnexpectedWarp(audit,'switch-ended-below-push',{pushZoom,zoomBeforeReset});
     if(tokenId!==cameraMotionToken||!state.viewer)return image;
 
+    setForwardWarpIntensity(1);
     try{state.viewer.setZoom(baseZoom)}catch{}
     const resetZoom=await currentViewerZoom();
-    warpLog('camera-reset-instant',{zoomTo:baseZoom,observedZoom:resetZoom,animated:false,hiddenByWarp:true});
+    warpLog('camera-reset-instant',{zoomTo:baseZoom,observedZoom:resetZoom,animated:false,hiddenByWarp:true,afterTargetImageEvent:audit.imageEventObserved});
     if(Number.isFinite(resetZoom)&&Math.abs(resetZoom-baseZoom)>.08)recordUnexpectedWarp(audit,'instant-reset-did-not-land-near-base',{baseZoom,resetZoom})
 
-    warpLog('warp-release-start',{durationMs:WARP_RELEASE_MS,zoomAnimation:false});
+    warpLog('warp-release-start',{durationMs:WARP_RELEASE_MS,zoomAnimation:false,viewerZoomLockedAtBase:true});
     await releaseForwardWarp(WARP_RELEASE_MS,tokenId);
     warpLog('warp-release-end',{zoom:await currentViewerZoom(),zoomAnimation:false});
 
@@ -172,9 +224,10 @@ moveToExclusiveCustom=async function(target,maxAttempts=3){
     audit.status=audit.unexpectedEffects.length?'WARN':'OK';
     audit.finishedAt=Math.round(performance.now());
     lastWarpAudit={...audit};
-    warpLog('transition-end',{status:audit.status,visibleZoomOutAnimation:false,unexpectedEffects:audit.unexpectedEffects});
+    warpLog('transition-end',{status:audit.status,visibleZoomOutAnimation:false,suppressedEffects:audit.suppressedEffects,unexpectedEffects:audit.unexpectedEffects});
     return image
   }catch(error){
+    if(zoomGuard){try{audit.switchZoomGuard=await zoomGuard.stop()}catch{}zoomGuard=null}
     clearForwardWarp();
     if(tokenId===cameraMotionToken&&state.viewer){try{state.viewer.setZoom(baseZoom)}catch{}}
     activeBaseZoom=null;setTransition(M.TransitionMode.Default);
@@ -194,6 +247,9 @@ logFrame=function(){
     warpAuditStatus:lastWarpAudit?.status||null,
     warpTransition:lastWarpAudit?.transition||null,
     warpImageEventObserved:lastWarpAudit?.imageEventObserved??null,
+    warpImageSwitchMs:lastWarpAudit?.imageSwitchMs??null,
+    warpSwitchMaxZoomDrop:lastWarpAudit?.switchZoomGuard?.maxObservedDrop??null,
+    warpSuppressedEffects:lastWarpAudit?.suppressedEffects?.slice?.()||[],
     warpUnexpectedEffects:lastWarpAudit?.unexpectedEffects?.slice?.()||[]
   })
 };
@@ -205,15 +261,20 @@ renderDiagnostics=function(){
     ['sequenceId',state.route?.sequenceId||'—'],['Next / Prev',state.route?.direction||'—'],
     ['sequence gap',`${f?.sequenceGap??'—'} / max ${state.route?.maxSequenceGap??'—'}`],
     ['distance',`${distanceLabel(f?.distanceFromStartM)} / ${distanceLabel(state.route?.totalDistanceM)}`],['remaining',distanceLabel(f?.remainingDistanceM)],
-    ['transition strategy','zoom-in + radial-like outer blur → Instantaneous switch'],
+    ['transition strategy','zoom-in + radial-like outer blur → zoom-locked Instantaneous switch'],
     ['visible zoom-out','DISABLED'],
-    ['camera reset','instant at max blur (not animated)'],
+    ['switch zoom lock',`ON / ${WARP_SWITCH_GUARD_INTERVAL_MS}ms / tol ${WARP_SWITCH_ZOOM_TOLERANCE.toFixed(3)}`],
+    ['camera reset','instant at max blur after target image event'],
     ['current move mode',lastMoveMode],
     ['warp / Default moves',`${warpFxMoves} / ${nativeDefaultMoves}`],
     ['warp zoom',`${WARP_MIN_ZOOM.toFixed(2)}–${WARP_MAX_ZOOM.toFixed(2)}`],
-    ['warp timing',`${WARP_PUSH_MS}ms push → switch → ${WARP_RELEASE_MS}ms blur release`],
-    ['last warp audit',audit?`${audit.status} / image ${audit.imageEventObserved?'event':'timeout'}`:'—'],
+    ['warp timing',`${WARP_PUSH_MS}ms push → locked switch → ${WARP_RELEASE_MS}ms blur release`],
+    ['last image switch',audit?.imageSwitchMs!=null?`${audit.imageSwitchMs}ms`:'—'],
+    ['avg image switch',fmt(average(warpSwitchTimes),0,'ms')],
+    ['last switch zoom drop',audit?.switchZoomGuard?fmt(audit.switchZoomGuard.maxObservedDrop,3,''):'—'],
+    ['suppressed FX',String(warpSuppressedEffectCount)],
     ['unexpected FX',String(warpUnexpectedEffectCount)],
+    ['last warp audit',audit?`${audit.status} / image ${audit.imageEventObserved?'event':'timeout'}`:'—'],
     ['last FX phase',warpTrace.at(-1)?.phase||'—'],
     ['hold after move',fmt(Number($('speed')?.value)||DEFAULT_CADENCE,0,'ms')],
     ['move effect',fmt(state.lastTransitionMs,0,'ms')],['avg move effect',fmt(average(state.transitionTimes),0,'ms')],
@@ -231,13 +292,14 @@ diagnosticsText=function(){
     currentDistanceM:f?.distanceFromStartM||0,remainingDistanceM:f?.remainingDistanceM||null,departure:state.departureTime?.toISOString?.()||null,arrival:state.arrivalTime?.toISOString?.()||null,
     targetFrames:state.route?.frames.length||0,denseSequenceFrames:state.route?.denseFrameCount||null,maxSequenceGap:state.route?.maxSequenceGap??null,avgSequenceGap:state.route?.avgSequenceGap??null,
     requestedCadenceMs:Number($('speed').value)||DEFAULT_CADENCE,
-    playbackTiming:'forward-warp-push + instantaneous-image-switch + blur-release + hold',
-    transitionStrategy:'autoplay=forward zoom-in with center-sharp/outer-blur warp; Mapillary moveTo=Instantaneous; no visible zoom-out animation',
+    playbackTiming:'forward-warp-push + zoom-locked instantaneous-image-switch + instant hidden reset + blur-release + hold',
+    transitionStrategy:'autoplay=forward zoom-in with center-sharp/outer-blur warp; Mapillary moveTo=Instantaneous; push zoom is guarded during image loading; no visible zoom-out animation',
     visibleZoomOutAnimation:false,
-    cameraReset:'instant-under-maximum-warp-after-image-event',
+    cameraReset:'instant-under-maximum-warp-after-target-image-event',
+    switchZoomLock:{enabled:true,intervalMs:WARP_SWITCH_GUARD_INTERVAL_MS,tolerance:WARP_SWITCH_ZOOM_TOLERANCE,severeDropThreshold:WARP_SWITCH_SEVERE_DROP},
     warpEffect:{pushMs:WARP_PUSH_MS,blurReleaseMs:WARP_RELEASE_MS,zoomRange:[WARP_MIN_ZOOM,WARP_MAX_ZOOM],layers:['outer-blur-near','outer-blur-mid','outer-blur-far'],trueRadialConvolution:false},
-    customTimelineMoves,nativeDefaultMoves,warpFxMoves,warpUnexpectedEffectCount,lastMoveMode,imageEventGate:true,
-    lastWarpAudit,transitionTrace:warpTrace.slice(-WARP_TRACE_LIMIT),
+    customTimelineMoves,nativeDefaultMoves,warpFxMoves,warpSuppressedEffectCount,warpUnexpectedEffectCount,lastMoveMode,imageEventGate:true,
+    averageImageSwitchMs:average(warpSwitchTimes),lastWarpAudit,transitionTrace:warpTrace.slice(-WARP_TRACE_LIMIT),
     hudAutoHideMs:HUD_AUTO_HIDE_MS,hudTapToggle:true,elevationSamples:state.route?.elevationProfile?.length||0,
     successfulFrames:state.successfulFrames,skippedFrames:state.skippedFrames,initialDisplayMs:state.initialDisplayMs,
     averageMoveEffectMs:average(state.transitionTimes),averageCadenceMs:average(state.cadenceTimes),
