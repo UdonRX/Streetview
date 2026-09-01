@@ -3,7 +3,7 @@ function closeSearch(){$('searchPanel').hidden=true;$('searchResults').hidden=tr
 async function handleSearch(){const q=$('mapSearch').value.trim();if(!q)return;$('searchResults').hidden=false;$('searchResults').innerHTML='<button disabled>検索中…</button>';try{const rows=await searchLocation(q);if(!rows?.length)throw new Error('見つかりませんでした');$('searchResults').innerHTML=rows.map((r,i)=>`<button type="button" data-i="${i}"><b>${escapeHtml(r.name.split(',')[0])}</b><small>${escapeHtml(r.name)}</small></button>`).join('');$('searchResults').querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{const r=rows[+btn.dataset.i];closeSearch();state.map.flyTo({center:[r.lng,r.lat],zoom:14});chooseDestination({name:r.name.split(',')[0],type:'attraction',lat:r.lat,lng:r.lng})}))}catch(e){$('searchResults').innerHTML=`<button disabled>${escapeHtml(e?.message||e)}</button>`}}
 function retryStartSelection(){state.stage='start';$('routeSearchCard').hidden=true;$('routeSearchRetry').hidden=true;syncPlannerUI();plannerStatus('出発地点を選ぶ','地図を少し動かして再度「出発地登録」')}
 
-const WARP_PLAYBACK_VERSION='mapillaryjs-v17-forward-warp-zoom-lock';
+const WARP_PLAYBACK_VERSION='mapillaryjs-v18-forward-warp-locked-flow';
 const WARP_PUSH_MS=360;
 const WARP_RELEASE_MS=120;
 const WARP_MIN_ZOOM=0.30;
@@ -32,11 +32,14 @@ function ensureForwardWarpFx(){
 #journeyWarpFx .warp-near{-webkit-backdrop-filter:blur(1.6px);backdrop-filter:blur(1.6px);-webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 0 24%,rgba(0,0,0,.18) 38%,#000 64%);mask-image:radial-gradient(circle at 50% 50%,transparent 0 24%,rgba(0,0,0,.18) 38%,#000 64%)}
 #journeyWarpFx .warp-mid{-webkit-backdrop-filter:blur(3.4px);backdrop-filter:blur(3.4px);-webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 0 43%,rgba(0,0,0,.18) 58%,#000 82%);mask-image:radial-gradient(circle at 50% 50%,transparent 0 43%,rgba(0,0,0,.18) 58%,#000 82%)}
 #journeyWarpFx .warp-far{-webkit-backdrop-filter:blur(6.5px);backdrop-filter:blur(6.5px);-webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 0 62%,rgba(0,0,0,.22) 76%,#000 100%);mask-image:radial-gradient(circle at 50% 50%,transparent 0 62%,rgba(0,0,0,.22) 76%,#000 100%)}
-#journeyWarpFx .warp-flare{position:absolute;inset:-12%;opacity:0;background:radial-gradient(circle at 50% 50%,transparent 0 28%,rgba(255,255,255,.015) 52%,rgba(255,255,255,.055) 100%);mix-blend-mode:screen;will-change:opacity}
+#journeyWarpFx .warp-flare{position:absolute;inset:-12%;opacity:0;background:radial-gradient(circle at 50% 50%,transparent 0 28%,rgba(255,255,255,.015) 52%,rgba(255,255,255,.055) 100%);mix-blend-mode:screen;transform-origin:50% 50%;will-change:opacity,transform}
+#journeyWarpFx[data-hold="1"] .warp-flare{animation:journeyWarpFlowOut .46s linear infinite}
+@keyframes journeyWarpFlowOut{0%{transform:scale(.84);opacity:.06}62%{opacity:.34}100%{transform:scale(1.20);opacity:0}}
 `;
   document.head.appendChild(style);
   fx=document.createElement('div');
   fx.id='journeyWarpFx';
+  fx.dataset.hold='0';
   fx.innerHTML='<i class="warp-layer warp-near"></i><i class="warp-layer warp-mid"></i><i class="warp-layer warp-far"></i><i class="warp-flare"></i>';
   $('viewerScreen')?.appendChild(fx);
   return fx;
@@ -48,11 +51,12 @@ function setForwardWarpIntensity(value){
   if(layers[0]){layers[0].style.opacity=String(v*.42);layers[0].style.transform=`scale(${(1.015+v*.010).toFixed(4)})`}
   if(layers[1]){layers[1].style.opacity=String(v*.62);layers[1].style.transform=`scale(${(1.018+v*.016).toFixed(4)})`}
   if(layers[2]){layers[2].style.opacity=String(v*.78);layers[2].style.transform=`scale(${(1.020+v*.024).toFixed(4)})`}
-  const flare=fx.querySelector('.warp-flare');if(flare)flare.style.opacity=String(v*.38);
+  const flare=fx.querySelector('.warp-flare');if(flare&&fx.dataset.hold!=='1')flare.style.opacity=String(v*.38);
   fx.dataset.intensity=v.toFixed(3);
   warpActive=v>.001;
 }
-function clearForwardWarp(){setForwardWarpIntensity(0);warpActive=false}
+function setForwardWarpHold(active){const fx=ensureForwardWarpFx();if(fx)fx.dataset.hold=active?'1':'0'}
+function clearForwardWarp(){setForwardWarpHold(false);setForwardWarpIntensity(0);warpActive=false}
 function warpLog(phase,details={}){
   const row={at:Math.round(performance.now()),transition:warpTransitionSeq,phase,fromId:currentFrame()?.id||null,toId:nextFrame()?.id||null,...details};
   warpTrace.push(row);if(warpTrace.length>WARP_TRACE_LIMIT)warpTrace.splice(0,warpTrace.length-WARP_TRACE_LIMIT);
@@ -92,6 +96,7 @@ function animateForwardWarpZoom(from,to,duration,token,audit){
 function startSwitchZoomGuard(pushZoom,token,audit){
   let active=true,timer=null,samples=0,corrections=0,minObserved=pushZoom,maxObservedDrop=0;
   const started=performance.now();
+  setForwardWarpHold(true);
   const loop=async()=>{
     if(!active||token!==cameraMotionToken||!state.viewer||state.pointerActive)return;
     const observed=await currentViewerZoom();
@@ -108,20 +113,21 @@ function startSwitchZoomGuard(pushZoom,token,audit){
   };
   loop();
   return {stop:async()=>{
-    active=false;if(timer)clearTimeout(timer);
+    active=false;if(timer)clearTimeout(timer);setForwardWarpHold(false);
     const observed=await currentViewerZoom();
     if(Number.isFinite(observed)){
       samples++;minObserved=Math.min(minObserved,observed);maxObservedDrop=Math.max(maxObservedDrop,Math.max(0,pushZoom-observed))
     }
     try{state.viewer?.setZoom?.(pushZoom)}catch{}
     const finalZoom=await currentViewerZoom();
-    const metrics={durationMs:Math.round(performance.now()-started),samples,corrections,minObserved,maxObservedDrop,finalZoom,guardIntervalMs:WARP_SWITCH_GUARD_INTERVAL_MS,tolerance:WARP_SWITCH_ZOOM_TOLERANCE};
+    const metrics={durationMs:Math.round(performance.now()-started),samples,corrections,minObserved,maxObservedDrop,finalZoom,guardIntervalMs:WARP_SWITCH_GUARD_INTERVAL_MS,tolerance:WARP_SWITCH_ZOOM_TOLERANCE,outwardFlowWhileLoading:true};
     if(maxObservedDrop>WARP_SWITCH_ZOOM_TOLERANCE)recordSuppressedWarp(audit,'mapillary-switch-zoom-drop-suppressed',{maxObservedDrop,minObserved,pushZoom,corrections});
     if(Number.isFinite(finalZoom)&&pushZoom-finalZoom>WARP_SWITCH_SEVERE_DROP)recordUnexpectedWarp(audit,'switch-zoom-lock-failed',{pushZoom,finalZoom,maxObservedDrop});
     return metrics
   }}
 }
 function releaseForwardWarp(duration,token){
+  setForwardWarpHold(false);
   return new Promise(resolve=>{
     const started=performance.now();
     const tick=now=>{
@@ -172,7 +178,7 @@ moveToExclusiveCustom=async function(target,maxAttempts=3){
     pushMs:WARP_PUSH_MS,blurReleaseMs:WARP_RELEASE_MS,
     mapillaryTransition:'Instantaneous',visibleZoomOutAnimation:false,
     cameraReset:'instant-under-maximum-warp',imageEventObserved:false,
-    imageSwitchMs:null,switchZoomGuard:null,
+    imageSwitchMs:null,switchZoomGuard:null,switchFlow:'outward-only-flare-loop',
     zoomOutAnimationCalls:0,suppressedEffects:[],unexpectedEffects:[],status:'running'
   };
   lastWarpAudit=audit;
@@ -197,7 +203,7 @@ moveToExclusiveCustom=async function(target,maxAttempts=3){
     const switchStarted=performance.now();
     const visiblePromise=waitForImageEvent(target.id);
     zoomGuard=startSwitchZoomGuard(pushZoom,tokenId,audit);
-    warpLog('image-switch-start',{targetId:String(target.id),warpIntensity:1,transitionMode:'Instantaneous',zoomLock:true,zoomLockTarget:pushZoom});
+    warpLog('image-switch-start',{targetId:String(target.id),warpIntensity:1,transitionMode:'Instantaneous',zoomLock:true,zoomLockTarget:pushZoom,outwardFlowWhileLoading:true});
     let image=await moveToWithRetry(target.id,maxAttempts);
     const visibleImage=await visiblePromise;
     if(visibleImage){image=visibleImage;audit.imageEventObserved=true}
@@ -210,7 +216,7 @@ moveToExclusiveCustom=async function(target,maxAttempts=3){
     if(Number.isFinite(zoomBeforeReset)&&pushZoom-zoomBeforeReset>WARP_SWITCH_SEVERE_DROP)recordUnexpectedWarp(audit,'switch-ended-below-push',{pushZoom,zoomBeforeReset});
     if(tokenId!==cameraMotionToken||!state.viewer)return image;
 
-    setForwardWarpIntensity(1);
+    setForwardWarpHold(false);setForwardWarpIntensity(1);
     try{state.viewer.setZoom(baseZoom)}catch{}
     const resetZoom=await currentViewerZoom();
     warpLog('camera-reset-instant',{zoomTo:baseZoom,observedZoom:resetZoom,animated:false,hiddenByWarp:true,afterTargetImageEvent:audit.imageEventObserved});
@@ -264,6 +270,7 @@ renderDiagnostics=function(){
     ['transition strategy','zoom-in + radial-like outer blur → zoom-locked Instantaneous switch'],
     ['visible zoom-out','DISABLED'],
     ['switch zoom lock',`ON / ${WARP_SWITCH_GUARD_INTERVAL_MS}ms / tol ${WARP_SWITCH_ZOOM_TOLERANCE.toFixed(3)}`],
+    ['switch warp flow','outward-only / active while loading'],
     ['camera reset','instant at max blur after target image event'],
     ['current move mode',lastMoveMode],
     ['warp / Default moves',`${warpFxMoves} / ${nativeDefaultMoves}`],
@@ -292,12 +299,12 @@ diagnosticsText=function(){
     currentDistanceM:f?.distanceFromStartM||0,remainingDistanceM:f?.remainingDistanceM||null,departure:state.departureTime?.toISOString?.()||null,arrival:state.arrivalTime?.toISOString?.()||null,
     targetFrames:state.route?.frames.length||0,denseSequenceFrames:state.route?.denseFrameCount||null,maxSequenceGap:state.route?.maxSequenceGap??null,avgSequenceGap:state.route?.avgSequenceGap??null,
     requestedCadenceMs:Number($('speed').value)||DEFAULT_CADENCE,
-    playbackTiming:'forward-warp-push + zoom-locked instantaneous-image-switch + instant hidden reset + blur-release + hold',
-    transitionStrategy:'autoplay=forward zoom-in with center-sharp/outer-blur warp; Mapillary moveTo=Instantaneous; push zoom is guarded during image loading; no visible zoom-out animation',
+    playbackTiming:'forward-warp-push + zoom-locked instantaneous-image-switch with outward-only flow + instant hidden reset + blur-release + hold',
+    transitionStrategy:'autoplay=forward zoom-in with center-sharp/outer-blur warp; Mapillary moveTo=Instantaneous; push zoom is guarded during image loading; outward-only flow continues until target image event; no visible zoom-out animation',
     visibleZoomOutAnimation:false,
     cameraReset:'instant-under-maximum-warp-after-target-image-event',
     switchZoomLock:{enabled:true,intervalMs:WARP_SWITCH_GUARD_INTERVAL_MS,tolerance:WARP_SWITCH_ZOOM_TOLERANCE,severeDropThreshold:WARP_SWITCH_SEVERE_DROP},
-    warpEffect:{pushMs:WARP_PUSH_MS,blurReleaseMs:WARP_RELEASE_MS,zoomRange:[WARP_MIN_ZOOM,WARP_MAX_ZOOM],layers:['outer-blur-near','outer-blur-mid','outer-blur-far'],trueRadialConvolution:false},
+    warpEffect:{pushMs:WARP_PUSH_MS,blurReleaseMs:WARP_RELEASE_MS,zoomRange:[WARP_MIN_ZOOM,WARP_MAX_ZOOM],layers:['outer-blur-near','outer-blur-mid','outer-blur-far'],switchFlow:'outward-only-flare-loop',trueRadialConvolution:false},
     customTimelineMoves,nativeDefaultMoves,warpFxMoves,warpSuppressedEffectCount,warpUnexpectedEffectCount,lastMoveMode,imageEventGate:true,
     averageImageSwitchMs:average(warpSwitchTimes),lastWarpAudit,transitionTrace:warpTrace.slice(-WARP_TRACE_LIMIT),
     hudAutoHideMs:HUD_AUTO_HIDE_MS,hudTapToggle:true,elevationSamples:state.route?.elevationProfile?.length||0,
