@@ -1,12 +1,15 @@
 'use strict';
-const VERSION='mapillaryjs-v10-hud-61c4-transition';
+const VERSION='mapillaryjs-v11-transition-route-poi';
 const TOKEN_KEY='streetview:mapillary-token';
-const ROUTE_CACHE_KEY='streetview:mapillary-route-cache-v5';
+const ROUTE_CACHE_KEY='streetview:mapillary-route-cache-v6';
 const GRAPH='https://graph.mapillary.com';
 const OVERPASS='https://overpass-api.de/api/interpreter';
 const ELEVATION_API='https://api.open-meteo.com/v1/elevation';
 const NOMINATIM='https://nominatim.openstreetmap.org/search';
 const TARGET_FRAMES=50;
+const MAX_PLAYBACK_FRAMES=180;
+const MAX_SEQUENCE_GAP=2;
+const MIN_FRAME_DISTANCE_M=1.5;
 const DEFAULT_CADENCE=800;
 const PRELOAD_SAMPLE=4;
 const PRELOAD_MIN=6;
