@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='mapillaryjs-v12-forward-motion-reset';
+const VERSION='mapillaryjs-v13-61c4-exact-elevation';
 const TOKEN_KEY='streetview:mapillary-token';
 const ROUTE_CACHE_KEY='streetview:mapillary-route-cache-v6';
 const GRAPH='https://graph.mapillary.com';
