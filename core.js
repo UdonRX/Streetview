@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='mapillary-route-index-mapillaryjs-v9';
+const VERSION='mapillaryjs-v10-hud-61c4-transition';
 const TOKEN_KEY='streetview:mapillary-token';
 const ROUTE_CACHE_KEY='streetview:mapillary-route-cache-v5';
 const GRAPH='https://graph.mapillary.com';
